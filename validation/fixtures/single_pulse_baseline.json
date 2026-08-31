@@ -1,0 +1,43 @@
+{
+  "caseName": "single_pulse_baseline",
+  "solver": "Single_Pulse_Visualizer",
+  "matlabVersion": "26.1.0.3346908 (R2026a) Update 5",
+  "wallTime_s": 1.3599695,
+  "cfg": {
+    "material": "W",
+    "Pavg": 40,
+    "spotRadius": 0.0001,
+    "f_rep": 1.8E+7,
+    "tau_FWHM": 5E-13,
+    "absorbance": 0.55,
+    "makePlots": false,
+    "saveFigures": false,
+    "outputDir": "C:\\Users\\d23\\Documents\\VS Code\\ultrafast-laser-ttm-py\\validation\\fixtures\\solver_outputs\\single_pulse_baseline"
+  },
+  "results": {
+    "solver": "SinglePulse",
+    "solverId": "single_pulse",
+    "contractVersion": "v1",
+    "material": "W",
+    "peakTe_C": 4022.8440138407009,
+    "peakTl_C": 399.23195954794039,
+    "finalTe_C": 59.621585077644113,
+    "finalTl_C": 59.621585070810227,
+    "wallTime_s": 0.3361854,
+    "outputFile": "C:\\Users\\d23\\Documents\\VS Code\\ultrafast-laser-ttm-py\\validation\\fixtures\\solver_outputs\\single_pulse_baseline\\TTM1D_18_MHz_500_fs_40_W_100_um_1p_gaussian.txt",
+    "outputDir": "C:\\Users\\d23\\Documents\\VS Code\\ultrafast-laser-ttm-py\\validation\\fixtures\\solver_outputs\\single_pulse_baseline",
+    "inputConfig": {
+      "material": "W",
+      "Pavg": 40,
+      "spotRadius": 0.0001,
+      "f_rep": 1.8E+7,
+      "tau_FWHM": 5E-13,
+      "absorbance": 0.55,
+      "makePlots": false,
+      "saveFigures": false,
+      "outputDir": "C:\\Users\\d23\\Documents\\VS Code\\ultrafast-laser-ttm-py\\validation\\fixtures\\solver_outputs\\single_pulse_baseline"
+    },
+    "invDetected": true,
+    "maxInv_C": 48.636995597733971
+  }
+}

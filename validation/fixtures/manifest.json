@@ -1,0 +1,86 @@
+{
+  "matlabVersion": "26.1.0.3346908 (R2026a) Update 5",
+  "toolboxVersion": "0.2.0",
+  "generatedBy": "validation/generate_fixtures.m",
+  "sourceRepo": "https://github.com/dfieser/ultrafast-laser-ttm-toolbox",
+  "note": ".mat files are the authoritative full-precision fixtures; in the JSON companions NaN/Inf serialize as null.",
+  "cases": [
+    {
+      "name": "surface_point_baseline",
+      "solver": "Surface_Point_Solver",
+      "status": "ok",
+      "wallTime_s": 7.1087628,
+      "errorMessage": ""
+    },
+    {
+      "name": "surface_point_cu",
+      "solver": "Surface_Point_Solver",
+      "status": "ok",
+      "wallTime_s": 1.3695278,
+      "errorMessage": ""
+    },
+    {
+      "name": "surface_point_square",
+      "solver": "Surface_Point_Solver",
+      "status": "ok",
+      "wallTime_s": 1.6453017,
+      "errorMessage": ""
+    },
+    {
+      "name": "single_pulse_baseline",
+      "solver": "Single_Pulse_Visualizer",
+      "status": "ok",
+      "wallTime_s": 1.3599695,
+      "errorMessage": ""
+    },
+    {
+      "name": "inversion_baseline",
+      "solver": "Inversion_Quantifier",
+      "status": "ok",
+      "wallTime_s": 4.3459056,
+      "errorMessage": ""
+    },
+    {
+      "name": "depth_profile_small",
+      "solver": "Depth_Profile_Solver",
+      "status": "ok",
+      "wallTime_s": 1.8711415,
+      "errorMessage": ""
+    },
+    {
+      "name": "depth_profile_baseline",
+      "solver": "Depth_Profile_Solver",
+      "status": "ok",
+      "wallTime_s": 17.6016016,
+      "errorMessage": ""
+    },
+    {
+      "name": "radial_profile_small",
+      "solver": "Radial_Profile_Solver",
+      "status": "ok",
+      "wallTime_s": 1.0285219,
+      "errorMessage": ""
+    },
+    {
+      "name": "radial_profile_baseline",
+      "solver": "Radial_Profile_Solver",
+      "status": "ok",
+      "wallTime_s": 1.4054645,
+      "errorMessage": ""
+    },
+    {
+      "name": "scanning_small",
+      "solver": "Scanning_Beam_Solver",
+      "status": "ok",
+      "wallTime_s": 29.9574406,
+      "errorMessage": ""
+    },
+    {
+      "name": "scanning_baseline",
+      "solver": "Scanning_Beam_Solver",
+      "status": "ok",
+      "wallTime_s": 927.2519031,
+      "errorMessage": ""
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+outputs/
+validation/fixtures/solver_outputs/
+validation/fixtures/matlab_run.log
