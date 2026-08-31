@@ -7,6 +7,7 @@
 
 <p align="center">
   <a href="https://doi.org/10.1007/s11665-026-14738-6"><img src="https://img.shields.io/badge/Paper-10.1007%2Fs11665--026--14738--6-b31b1b" alt="Paper DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.22210435"><img src="https://zenodo.org/badge/1352513618.svg" alt="DOI"></a>
   <a href="https://github.com/dfieser/ultrafast-laser-ttm-py/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/dfieser/ultrafast-laser-ttm-py/ci.yml?branch=main&label=CI" alt="CI status"></a>
   <a href="https://github.com/dfieser/ultrafast-laser-ttm-py/releases"><img src="https://img.shields.io/github/v/release/dfieser/ultrafast-laser-ttm-py" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="MIT License"></a>
@@ -191,11 +192,23 @@ If this toolbox contributes to published work, please cite the article:
 }
 ```
 
-To cite the software itself, use the metadata in [CITATION.cff](CITATION.cff). Each tagged release is archived on Zenodo under its own version DOI; the concept DOI will be added here with the first release. The MATLAB reference implementation has its own record (concept DOI [10.5281/zenodo.20389305](https://doi.org/10.5281/zenodo.20389305)).
+To cite the software itself, use the version DOI from the Zenodo record (concept DOI [10.5281/zenodo.22210435](https://doi.org/10.5281/zenodo.22210435) always resolves to the latest release) or the metadata in [CITATION.cff](CITATION.cff):
+
+```bibtex
+@software{fieser_ttm_toolbox_py,
+  author = {Fieser, David},
+  title  = {Ultrafast Laser TTM Toolbox (Python)},
+  year   = {2026},
+  doi    = {10.5281/zenodo.22210435},
+  url    = {https://github.com/dfieser/ultrafast-laser-ttm-py},
+}
+```
+
+The MATLAB reference implementation has its own record (concept DOI [10.5281/zenodo.20389305](https://doi.org/10.5281/zenodo.20389305)).
 
 ## Versioning and Releases
 
-The `VERSION` file at the repository root is the single source of truth (also exposed as `laserttm.__version__`). `CITATION.cff`, `.zenodo.json`, and `pyproject.toml` must state the same version; the release workflow checks this. Bumping `VERSION` on `main` tags the commit, creates a GitHub release, and Zenodo archives it under a new version DOI. See [.github/workflows/release.yml](.github/workflows/release.yml).
+The `VERSION` file at the repository root is the single source of truth: the package version is read from it at build time (`[tool.hatch.version]` in `pyproject.toml`) and exposed at runtime as `laserttm.__version__`. Every push to `main` is automatically published as a GitHub release — the [release workflow](.github/workflows/release.yml) bumps the patch number in `VERSION`, tags the commit, and publishes; Zenodo then archives the release under a new version DOI. To jump to a new minor or major version, edit `VERSION` yourself in your push and that exact version is released instead.
 
 ## License
 

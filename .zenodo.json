@@ -1,7 +1,6 @@
 {
   "title": "Ultrafast Laser TTM Toolbox (Python)",
   "upload_type": "software",
-  "version": "0.1.0",
   "description": "Python solvers (package laserttm) for ultrafast pulsed-laser heating and two-temperature-model studies, including surface-point, depth-profile, radial-profile, single-pulse, inversion-analysis, and scanning-beam workflows. Port of the MATLAB Ultrafast Laser TTM Toolbox, validated solver-by-solver against that reference implementation.",
   "creators": [
     {

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "laserttm"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Two-temperature model solvers for ultrafast pulsed-laser heating of metals (Python port of the Ultrafast Laser TTM Toolbox)"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -39,6 +39,12 @@ dev = ["pytest>=7.0", "ruff"]
 Homepage = "https://github.com/dfieser/ultrafast-laser-ttm-py"
 "Reference implementation (MATLAB)" = "https://github.com/dfieser/ultrafast-laser-ttm-toolbox"
 Paper = "https://doi.org/10.1007/s11665-026-14738-6"
+
+[tool.hatch.version]
+# The VERSION file at the repository root is the single source of truth;
+# the release workflow bumps it and everything else derives from it.
+path = "VERSION"
+pattern = "^(?P<version>\\S+)"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/laserttm"]
