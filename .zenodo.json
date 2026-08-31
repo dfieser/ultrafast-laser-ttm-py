@@ -1,0 +1,41 @@
+{
+  "title": "Ultrafast Laser TTM Toolbox (Python)",
+  "upload_type": "software",
+  "version": "0.1.0",
+  "description": "Python solvers (package laserttm) for ultrafast pulsed-laser heating and two-temperature-model studies, including surface-point, depth-profile, radial-profile, single-pulse, inversion-analysis, and scanning-beam workflows. Port of the MATLAB Ultrafast Laser TTM Toolbox, validated solver-by-solver against that reference implementation.",
+  "creators": [
+    {
+      "name": "Fieser, David",
+      "affiliation": "Department of Mechanical and Aerospace Engineering, University of Tennessee, Knoxville, 1512 Middle Drive, Knoxville, TN 37996, USA",
+      "orcid": "0009-0007-5754-4331"
+    }
+  ],
+  "license": "MIT",
+  "access_right": "open",
+  "keywords": [
+    "Python",
+    "two-temperature model",
+    "ultrafast laser",
+    "pulsed laser",
+    "thermal modeling",
+    "heat transfer"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "10.1007/s11665-026-14738-6",
+      "relation": "isSupplementTo",
+      "resource_type": "publication-article"
+    },
+    {
+      "identifier": "10.5281/zenodo.20389305",
+      "relation": "isDerivedFrom",
+      "resource_type": "software"
+    },
+    {
+      "identifier": "https://github.com/dfieser/ultrafast-laser-ttm-py",
+      "relation": "isSupplementTo",
+      "resource_type": "software"
+    }
+  ],
+  "notes": "This work was supported by the National Science Foundation under Award No. CMMI-2412544, Collaborative Research: Additive Manufacturing of Crack-Free Tungsten Using Ultrashort Pulsed Lasers (PI: Dr. Anming Hu, Division of Civil, Mechanical, and Manufacturing Innovation, NSF Program: AM-Advanced Manufacturing). The authors gratefully acknowledge Drs. Yanfei Gao, Wenda Tan, and Seungha Shin for their contributions and collaboration on this project. Additional support was provided by the University of Tennessee, Knoxville, through a hiring package. D.F. gratefully acknowledges support from the UTK 100 Talented PhD Scholarship. Support for the Center for Materials Processing from the State of Tennessee and the Tennessee Higher Education Commission is also gratefully acknowledged."
+}

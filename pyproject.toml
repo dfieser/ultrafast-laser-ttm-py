@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "laserttm"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Two-temperature model solvers for ultrafast pulsed-laser heating of metals (Python port of the Ultrafast Laser TTM Toolbox)"
 readme = "README.md"
 license = { file = "LICENSE" }

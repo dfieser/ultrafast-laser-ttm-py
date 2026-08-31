@@ -11,7 +11,7 @@ from .scanning_beam import scanning_beam_solver
 from .single_pulse import single_pulse_visualizer
 from .surface_point import surface_point_solver
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0"
 
 __all__ = [
     "__version__",
