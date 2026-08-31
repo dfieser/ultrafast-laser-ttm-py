@@ -42,7 +42,7 @@ laserttm-mcp = "laserttm.mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/dfieser/ultrafast-laser-ttm-py"
-"Reference implementation (MATLAB)" = "https://github.com/dfieser/ultrafast-laser-ttm-toolbox"
+"MATLAB reference implementation" = "https://github.com/dfieser/ultrafast-laser-ttm-toolbox"
 Paper = "https://doi.org/10.1007/s11665-026-14738-6"
 
 [tool.hatch.version]
