@@ -27,11 +27,27 @@ PORTED = {}
 
 
 def _register():
-    from laserttm import depth_profile_solver, single_pulse_visualizer, surface_point_solver
+    from laserttm import (
+        depth_profile_solver,
+        inversion_quantifier,
+        radial_profile_solver,
+        scanning_beam_solver,
+        single_pulse_visualizer,
+        surface_point_solver,
+    )
 
     PORTED["surface_point"] = surface_point_solver
     PORTED["single_pulse"] = single_pulse_visualizer
     PORTED["depth_profile"] = depth_profile_solver
+    PORTED["radial_profile"] = radial_profile_solver
+    PORTED["inversion"] = inversion_quantifier
+
+    def _scanning(cfg):
+        params = {k: v for k, v in cfg.items()
+                  if k not in ("makePlots", "saveFigures", "outputDir")}
+        return scanning_beam_solver(params, cfg.get("outputDir"), save_plots=False)
+
+    PORTED["scanning"] = _scanning
 
 
 def bench_case(case: str, matlab_s: float) -> None:

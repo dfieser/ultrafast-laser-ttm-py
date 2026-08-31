@@ -5,6 +5,9 @@ implementation for doi:10.1007/s11665-026-14738-6).
 """
 
 from .depth_profile import depth_profile_solver
+from .inversion_quantifier import inversion_quantifier
+from .radial_profile import radial_profile_solver
+from .scanning_beam import scanning_beam_solver
 from .single_pulse import single_pulse_visualizer
 from .surface_point import surface_point_solver
 
@@ -13,6 +16,9 @@ __version__ = "0.1.0.dev0"
 __all__ = [
     "__version__",
     "depth_profile_solver",
+    "inversion_quantifier",
+    "radial_profile_solver",
+    "scanning_beam_solver",
     "single_pulse_visualizer",
     "surface_point_solver",
 ]

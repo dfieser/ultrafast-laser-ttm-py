@@ -401,6 +401,333 @@ def crank_nicolson_step_const(t_arr, r, tamb):
 
 
 @njit(cache=True)
+def crank_nicolson_radial_step_kt(t_arr, dt, dr, tamb, cl, k_tab_t, k_tab_k):
+    """One CN step for radial (cylindrical) heat diffusion with k(T).
+
+    Line-faithful port of crankNicolsonRadialStep_kT (Radial_Profile_Solver.m):
+      dT/dt = (1/r) d/dr( r k(T) dT/dr ) / Cl
+    with lagged conductivity at T^n, symmetry (dT/dr = 0) at r = 0 handled via
+    L'Hopital (factor 4 on the centre node), and Dirichlet T = tamb at r = rMax.
+    """
+    nr = t_arr.size
+    n = nr - 1
+    dr2 = dr * dr
+
+    kv = k_hybrid(t_arr[:n], k_tab_t, k_tab_k)
+    k_amb = k_hybrid(np.array([tamb]), k_tab_t, k_tab_k)[0]
+
+    k_half = np.empty(n)
+    for i in range(n - 1):
+        k_half[i] = 0.5 * (kv[i] + kv[i + 1])
+    k_half[n - 1] = 0.5 * (kv[n - 1] + k_amb)
+
+    fh = k_half * dt / (2.0 * cl * dr2)
+
+    a = np.zeros(n)
+    b = np.zeros(n)
+    c = np.zeros(n)
+    d = np.zeros(n)
+
+    # Centre node (r = 0): L'Hopital gives 2 * d2T/dr2
+    fp = fh[0]
+    b[0] = 1.0 + 4.0 * fp
+    c[0] = -4.0 * fp
+    d[0] = (1.0 - 4.0 * fp) * t_arr[0] + 4.0 * fp * t_arr[1]
+
+    # Interior nodes (0-based i is also the physical radial index j)
+    for i in range(1, n - 1):
+        rp_w = (i + 0.5) / i
+        rm_w = (i - 0.5) / i
+        fp_i = fh[i] * rp_w
+        fm_i = fh[i - 1] * rm_w
+        a[i] = -fm_i
+        b[i] = 1.0 + fm_i + fp_i
+        c[i] = -fp_i
+        d[i] = fm_i * t_arr[i - 1] + (1.0 - fm_i - fp_i) * t_arr[i] + fp_i * t_arr[i + 1]
+
+    # Node adjacent to the Dirichlet boundary
+    j_last = n - 1
+    rp_w = (j_last + 0.5) / j_last
+    rm_w = (j_last - 0.5) / j_last
+    fp_n = fh[n - 1] * rp_w
+    fm_n = fh[n - 2] * rm_w
+    a[n - 1] = -fm_n
+    b[n - 1] = 1.0 + fm_n + fp_n
+    d[n - 1] = fm_n * t_arr[n - 2] + (1.0 - fm_n - fp_n) * t_arr[n - 1] \
+        + fp_n * tamb + fp_n * tamb
+
+    # Thomas algorithm
+    for i in range(1, n):
+        m = a[i] / b[i - 1]
+        b[i] = b[i] - m * c[i - 1]
+        d[i] = d[i] - m * d[i - 1]
+
+    t_new = t_arr.copy()
+    t_new[n - 1] = d[n - 1] / b[n - 1]
+    for i in range(n - 2, -1, -1):
+        t_new[i] = (d[i] - c[i] * t_new[i + 1]) / b[i]
+    t_new[nr - 1] = tamb
+    return t_new
+
+
+@njit(cache=True)
+def radial_coast_kt(t_arr, n_steps, dt, dr, tamb, cl, k_tab_t, k_tab_k):
+    """n_steps radial CN k(T) steps (the per-pulse radial coast loop)."""
+    t_cur = t_arr.copy()
+    for _ in range(n_steps):
+        t_cur = crank_nicolson_radial_step_kt(t_cur, dt, dr, tamb, cl, k_tab_t, k_tab_k)
+    return t_cur
+
+
+@njit(cache=True)
+def cn_depth_multi_kt(tz_all, active, n_steps, dt, dz, tamb, cl,
+                      k_tab_t, k_tab_k, t_fine_end, sample_interval):
+    """Depth-CN coast applied to every active radial node's depth column.
+
+    Port of the 'independent'-mode Phase 2 loop of Radial_Profile_Solver.m:
+    per CN step, every active column advances (inactive columns — negligible
+    fluence — are skipped exactly as in MATLAB), and the centre column's
+    surface temperature is sampled on the usual (di % sample_interval == 0
+    or di == n_steps) rule. tz_all is modified in place; returns the sampled
+    (times, centre surface T) arrays.
+    """
+    n_samples = 0
+    for di in range(1, n_steps + 1):
+        if di % sample_interval == 0 or di == n_steps:
+            n_samples += 1
+    c_t = np.empty(n_samples)
+    c_tl = np.empty(n_samples)
+
+    nr = tz_all.shape[1]
+    dt_diff = dt
+    j = 0
+    for di in range(1, n_steps + 1):
+        for ri in range(nr):
+            if not active[ri]:
+                continue
+            tz_all[:, ri] = crank_nicolson_step_kt(
+                tz_all[:, ri].copy(), dt_diff, dz, tamb, cl, k_tab_t, k_tab_k)
+        if di % sample_interval == 0 or di == n_steps:
+            c_t[j] = t_fine_end + di * dt_diff
+            c_tl[j] = tz_all[0, 0]
+            j += 1
+    return c_t, c_tl
+
+
+@njit(cache=True)
+def rk4_single_pulse_response(t0, gamma, g_ep, cl, tau, pulse_offset, code, eabs_vol):
+    """Single-pulse 0D RK4 response used by the scanning-beam solver.
+
+    Line-faithful port of the single-pulse while-loop in
+    Scanning_Beam_Solver.m: fixed fine resolution inside +/- 6*tau of the
+    pulse centre, stability-limited dt elsewhere, run until the relative
+    electron-lattice difference converges below 1e-6 (or t reaches
+    pulse_offset + 50*tau). Returns the end-state (Te, Tl).
+    """
+    te = t0
+    tl = t0
+    tc = 0.0
+    t_end = pulse_offset + 50.0 * tau
+    dt_pulse = tau / 40.0
+    past_pulse = False
+    n_pulses = 1
+    trep = 1.0  # irrelevant for a single pulse (cutoff keeps only pulse 0)
+
+    while tc < t_end:
+        ce_now = gamma * max(te, 1.0)
+        dt_stab = 0.2 * ce_now / g_ep
+        if abs(tc - pulse_offset) < 6.0 * tau:
+            dt = min(dt_stab, dt_pulse)
+        else:
+            dt = dt_stab
+            past_pulse = True
+        dt = max(dt, 1e-17)
+
+        k1e, k1l, _ = _ttm_derivs_0d(tc, te, tl, gamma, g_ep, cl,
+                                     n_pulses, trep, pulse_offset, code, tau, eabs_vol)
+        k2e, k2l, _ = _ttm_derivs_0d(tc + dt / 2, te + dt / 2 * k1e, tl + dt / 2 * k1l,
+                                     gamma, g_ep, cl,
+                                     n_pulses, trep, pulse_offset, code, tau, eabs_vol)
+        k3e, k3l, _ = _ttm_derivs_0d(tc + dt / 2, te + dt / 2 * k2e, tl + dt / 2 * k2l,
+                                     gamma, g_ep, cl,
+                                     n_pulses, trep, pulse_offset, code, tau, eabs_vol)
+        k4e, k4l, _ = _ttm_derivs_0d(tc + dt, te + dt * k3e, tl + dt * k3l,
+                                     gamma, g_ep, cl,
+                                     n_pulses, trep, pulse_offset, code, tau, eabs_vol)
+        te = max(te + (dt / 6.0) * (k1e + 2.0 * k2e + 2.0 * k3e + k4e), 1.0)
+        tl = max(tl + (dt / 6.0) * (k1l + 2.0 * k2l + 2.0 * k3l + k4l), 1.0)
+        tc = tc + dt
+        if past_pulse and abs(te - tl) / max(tl, 1.0) < 1e-6:
+            break
+    return te, tl
+
+
+@njit(cache=True)
+def _thomas_prefactor(a, b, c):
+    """Forward-eliminate a constant tridiagonal system once.
+
+    Returns (m, bp): the row multipliers and modified diagonal, so repeated
+    solves only sweep the right-hand side. Arithmetic is identical to running
+    the full Thomas algorithm each call.
+    """
+    n = b.size
+    m = np.zeros(n)
+    bp = b.copy()
+    for i in range(1, n):
+        m[i] = a[i] / bp[i - 1]
+        bp[i] = b[i] - m[i] * c[i - 1]
+    return m, bp
+
+
+@njit(cache=True)
+def _thomas_solve_prefactored(m, bp, c, d, x):
+    """Solve with a prefactored tridiagonal system (in-place result in x)."""
+    n = bp.size
+    dp = d  # forward sweep in place
+    for i in range(1, n):
+        dp[i] = dp[i] - m[i] * dp[i - 1]
+    x[n - 1] = dp[n - 1] / bp[n - 1]
+    for i in range(n - 2, -1, -1):
+        x[i] = (dp[i] - c[i] * x[i + 1]) / bp[i]
+
+
+@njit(cache=True)
+def scanning_chunk(np_start, np_end, n_pulses,
+                   tsurf, tpeak, tz, peak_hist,
+                   x_grid, gy_gauss, inv2w2, v_scan, trep, dteq_single, t0,
+                   depth_is_exp, exp_decay_z, box_mask_z,
+                   n_cn, ndiff, r_diff,
+                   nadi, fxdt, fydt):
+    """Pulses np_start..np_end-1 (0-based) of the scanning-beam main loop.
+
+    Line-faithful port of the vectorized MATLAB loop: Gaussian deposit by
+    outer product, peak-map update, depth CN coast with survival scaling,
+    then NadiPerGap ADI lateral-diffusion steps with Dirichlet T0 borders.
+    All state arrays (tsurf, tpeak, tz, peak_hist) are updated in place.
+    """
+    ny, nx = tsurf.shape
+
+    # --- Prefactored depth-CN system (constant r_diff; solve for nodes 0..n_cn-1)
+    a_d = np.zeros(n_cn)
+    b_d = np.full(n_cn, 1.0 + r_diff)
+    c_d = np.zeros(n_cn)
+    c_d[0] = -r_diff                       # Neumann (adiabatic) surface BC
+    for i in range(1, n_cn - 1):
+        a_d[i] = -r_diff / 2.0
+        c_d[i] = -r_diff / 2.0
+    a_d[n_cn - 1] = -r_diff / 2.0
+    m_d, bp_d = _thomas_prefactor(a_d, b_d, c_d)
+    d_d = np.empty(n_cn)
+
+    # --- Prefactored ADI systems (interior unknowns only)
+    nx_int = nx - 2
+    ny_int = ny - 2
+    a_x = np.full(nx_int, -fxdt / 2.0)
+    b_x = np.full(nx_int, 1.0 + fxdt)
+    c_x = np.full(nx_int, -fxdt / 2.0)
+    a_x[0] = 0.0
+    c_x[nx_int - 1] = 0.0
+    m_x, bp_x = _thomas_prefactor(a_x, b_x, c_x)
+
+    a_y = np.full(ny_int, -fydt / 2.0)
+    b_y = np.full(ny_int, 1.0 + fydt)
+    c_y = np.full(ny_int, -fydt / 2.0)
+    a_y[0] = 0.0
+    c_y[ny_int - 1] = 0.0
+    m_y, bp_y = _thomas_prefactor(a_y, b_y, c_y)
+
+    bx_adi = (fxdt / 2.0) * t0
+    by_adi = (fydt / 2.0) * t0
+
+    rhs_row = np.empty(nx_int)
+    sol_row = np.empty(nx_int)
+    rhs_col = np.empty(ny_int)
+    sol_col = np.empty(ny_int)
+    thalf = np.empty((ny, nx))
+
+    for np_i in range(np_start, np_end):
+        # --- Gaussian fluence deposit (outer product) ---
+        x_laser = v_scan * np_i * trep
+        peak_surf = -1.0e300
+        for ix in range(nx):
+            gx = np.exp(-inv2w2 * (x_grid[ix] - x_laser) ** 2)
+            for iy in range(ny):
+                v = tsurf[iy, ix] + dteq_single * gy_gauss[iy] * gx
+                tsurf[iy, ix] = v
+                tpeak[iy, ix] = max(tpeak[iy, ix], v)
+                peak_surf = max(peak_surf, v)
+        peak_hist[np_i] = peak_surf
+
+        # --- Depth CN coast with survival scaling ---
+        tsurf_max = peak_surf
+        if depth_is_exp:
+            delta = tsurf_max - tz[0]
+            for iz in range(tz.size):
+                tz[iz] = tz[iz] + delta * exp_decay_z[iz]
+        else:
+            for iz in range(tz.size):
+                if box_mask_z[iz]:
+                    tz[iz] = tsurf_max
+        tsurf_max_before = tz[0]
+
+        for _ in range(ndiff):
+            # d = B * Tz_int + bvec (surface Neumann row, Dirichlet bottom)
+            d_d[0] = (1.0 - r_diff) * tz[0] + r_diff * tz[1]
+            for i in range(1, n_cn - 1):
+                d_d[i] = (r_diff / 2.0) * tz[i - 1] + (1.0 - r_diff) * tz[i] \
+                    + (r_diff / 2.0) * tz[i + 1]
+            d_d[n_cn - 1] = (r_diff / 2.0) * tz[n_cn - 2] \
+                + (1.0 - r_diff) * tz[n_cn - 1] + r_diff * t0
+            _thomas_solve_prefactored(m_d, bp_d, c_d, d_d, tz[:n_cn])
+        tz[tz.size - 1] = t0
+
+        if (tsurf_max_before - t0) > 1e-10:
+            survival = (tz[0] - t0) / (tsurf_max_before - t0)
+            survival = max(survival, 0.0)
+        else:
+            survival = 1.0
+        for ix in range(nx):
+            for iy in range(ny):
+                tsurf[iy, ix] = t0 + (tsurf[iy, ix] - t0) * survival
+
+        # --- ADI lateral diffusion ---
+        for _ in range(nadi):
+            # X-sweep: implicit in x, explicit in y
+            for iy in range(1, ny - 1):
+                for ix in range(1, nx - 1):
+                    rhs_row[ix - 1] = tsurf[iy, ix] + (fydt / 2.0) * (
+                        tsurf[iy - 1, ix] - 2.0 * tsurf[iy, ix] + tsurf[iy + 1, ix])
+                rhs_row[0] += bx_adi
+                rhs_row[nx_int - 1] += bx_adi
+                _thomas_solve_prefactored(m_x, bp_x, c_x, rhs_row, sol_row)
+                for ix in range(1, nx - 1):
+                    thalf[iy, ix] = sol_row[ix - 1]
+            for ix in range(nx):
+                thalf[0, ix] = t0
+                thalf[ny - 1, ix] = t0
+            for iy in range(ny):
+                thalf[iy, 0] = t0
+                thalf[iy, nx - 1] = t0
+
+            # Y-sweep: implicit in y, explicit in x
+            for ix in range(1, nx - 1):
+                for iy in range(1, ny - 1):
+                    rhs_col[iy - 1] = thalf[iy, ix] + (fxdt / 2.0) * (
+                        thalf[iy, ix - 1] - 2.0 * thalf[iy, ix] + thalf[iy, ix + 1])
+                rhs_col[0] += by_adi
+                rhs_col[ny_int - 1] += by_adi
+                _thomas_solve_prefactored(m_y, bp_y, c_y, rhs_col, sol_col)
+                for iy in range(1, ny - 1):
+                    tsurf[iy, ix] = sol_col[iy - 1]
+            for ix in range(nx):
+                tsurf[0, ix] = t0
+                tsurf[ny - 1, ix] = t0
+            for iy in range(ny):
+                tsurf[iy, 0] = t0
+                tsurf[iy, nx - 1] = t0
+
+
+@njit(cache=True)
 def cn_coast_const(t_arr, coast_gap, n_diff, alpha, dz, tamb, t_fine_end, sample_interval):
     """Phase 2 of the 0D model: n_diff CN steps over coast_gap seconds.
 

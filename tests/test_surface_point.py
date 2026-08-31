@@ -72,9 +72,12 @@ def test_against_matlab_fixture(case, tmp_path):
 def test_output_file_written(tmp_path):
     fx = load_fixture("surface_point_baseline")
     results = surface_point_solver(_cfg_from_fixture(fx, tmp_path))
+    import ntpath
     import os
 
     assert os.path.exists(results["outputFile"])
-    # Same filename construction as MATLAB (which wrote this fixture's file)
+    # Same filename construction as MATLAB (which wrote this fixture's file).
+    # The fixture stores a Windows path; ntpath.basename splits it correctly
+    # on every platform (os.path.basename would not on Linux).
     assert os.path.basename(results["outputFile"]) == \
-        os.path.basename(str(fx["results"]["outputFile"]))
+        ntpath.basename(str(fx["results"]["outputFile"]))

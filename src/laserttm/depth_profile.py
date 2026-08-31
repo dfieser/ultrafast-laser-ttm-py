@@ -58,9 +58,6 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     save_figures = get_cfg_field(cfg, "saveFigures", False)
     if save_figures:
         make_plots = True
-    if make_plots:
-        print("  [laserttm] Note: depth-solver figures are not ported yet; "
-              "computing without plots.")
 
     print("=== 1D Two-Temperature Model Pulsed Laser Calculator ===")
 
@@ -91,7 +88,9 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         get_cfg_field(cfg, "snapshotDelays", _DEFAULT_SNAPSHOT_DELAYS), dtype=float
     )
 
-    enable_radial = get_cfg_field(cfg, "enableRadialProfile", True)  # noqa: F841 (plots pending)
+    enable_radial = get_cfg_field(cfg, "enableRadialProfile", True)
+    nr_radial = int(get_cfg_field(cfg, "Nr_radial", 20))
+    r_max_factor = get_cfg_field(cfg, "rMax_factor", 3)
     dz_target_diff = get_cfg_field(cfg, "dzTarget_diff", 500e-9)
     n_diff = int(get_cfg_field(cfg, "Ndiff", 100))
 
@@ -566,6 +565,35 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
             f"{all_times[i]:20.12e}  {all_te_surf[i] - 273.15:16.6f}  "
             f"{all_tl_surf[i] - 273.15:16.6f}\n" for i in range(all_times.size))
     print(f"  Output written to: {out_path}\n")
+
+    if make_plots:
+        from .plotting import plot_depth_profile
+
+        plot_depth_profile(
+            all_times=all_times, all_tl_surf=all_tl_surf,
+            teq_vals=teq_vals, tresid_vals=tresid_vals,
+            snap_te=snap_te, snap_tl=snap_tl, snap_labels=snap_labels,
+            z_grid=z_grid, lz=lz,
+            profile_snaps_tz=profile_snaps_tz,
+            profile_snaps_label=profile_snaps_label,
+            z_grid_diff=z_grid_diff, ldiff=ldiff, t0=t0,
+            enable_radial=enable_radial, nr_radial=nr_radial,
+            r_max_factor=r_max_factor, spot_radius=spot_radius,
+            alpha_diff=alpha_diff, sim_duration=sim_duration,
+            material=material, gamma=gamma, cl=cl, g_ep=g_ep,
+            ke0=ke0, kl=kl, alpha_opt=alpha_opt, delta_opt=delta_opt,
+            pavg=pavg, frep_v=frep_v, frep_u=frep_u, ep_v=ep_v, ep_u=ep_u,
+            tau_v=tau_v, tau_u=tau_u, spot_v=spot_v, spot_u=spot_u,
+            f_peak=f_peak, absorbance=absorbance,
+            n_pulses=n_pulses, te_peak_all=te_peak_all,
+            tl_peak_all=tl_peak_all, peak_pulse=peak_pulse,
+            tresid_last=tresid_vals[-1], e_input=e_input, du_depth=du_depth,
+            inv_detected=inv_detected,
+            max_inv=(max_inv_all if inv_detected else 0.0),
+            mx_v=(mx_v if inv_detected else 0.0),
+            mx_u=(mx_u if inv_detected else ""),
+            save_dir=(output_dir if save_figures else None),
+            case_tag=case_tag)
 
     print("Done.")
 
