@@ -15,7 +15,8 @@ from laserttm import surface_point_solver
 
 from .conftest import load_fixture
 
-CASES = ["surface_point_baseline", "surface_point_cu", "surface_point_square"]
+CASES = ["surface_point_baseline", "surface_point_cu", "surface_point_square",
+         "surface_point_au"]
 
 # (field, rtol, atol) — temperatures in deg C, energies in J/m^2
 SCALAR_CHECKS = [

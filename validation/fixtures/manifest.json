@@ -81,6 +81,20 @@
       "status": "ok",
       "wallTime_s": 927.2519031,
       "errorMessage": ""
+    },
+    {
+      "name": "surface_point_au",
+      "solver": "Surface_Point_Solver",
+      "status": "ok",
+      "wallTime_s": 4.7691021,
+      "errorMessage": ""
+    },
+    {
+      "name": "radial_profile_independent",
+      "solver": "Radial_Profile_Solver",
+      "status": "ok",
+      "wallTime_s": 2.66801,
+      "errorMessage": ""
     }
   ]
 }

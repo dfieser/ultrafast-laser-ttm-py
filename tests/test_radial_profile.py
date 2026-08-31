@@ -15,7 +15,8 @@ from laserttm import radial_profile_solver
 
 from .conftest import load_fixture
 
-CASES = ["radial_profile_small", "radial_profile_baseline"]
+CASES = ["radial_profile_small", "radial_profile_baseline",
+         "radial_profile_independent"]
 
 SCALAR_CHECKS = [
     ("peakTeq_C", 1e-6, 1e-4),

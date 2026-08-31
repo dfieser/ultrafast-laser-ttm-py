@@ -1,4 +1,4 @@
-function generate_fixtures()
+function generate_fixtures(varargin)
 %GENERATE_FIXTURES  Golden-fixture generation for the laserttm Python port.
 %
 %   Runs the MATLAB reference solvers from ultrafast-laser-ttm-toolbox
@@ -12,6 +12,10 @@ function generate_fixtures()
 %   stated tolerances. Wall times double as the performance baseline.
 %
 %   Run from this folder:   matlab -batch generate_fixtures
+%
+%   Pass case names to (re)generate only those cases; existing manifest
+%   entries for other cases are preserved:
+%       matlab -batch "generate_fixtures('surface_point_au')"
 
 thisDir     = fileparts(mfilename('fullpath'));
 matlabRepo  = fullfile(thisDir, '..', '..', 'ultrafast-laser-ttm-toolbox');
@@ -21,16 +25,32 @@ assert(exist(fullfile(matlabRepo, 'src'), 'dir') == 7, ...
 addpath(fullfile(matlabRepo, 'src'));
 if ~exist(fixturesDir, 'dir'); mkdir(fixturesDir); end
 
-manifest = struct();
-manifest.matlabVersion   = version;
-manifest.toolboxVersion  = strtrim(fileread(fullfile(matlabRepo, 'VERSION')));
-manifest.generatedBy     = 'validation/generate_fixtures.m';
-manifest.sourceRepo      = 'https://github.com/dfieser/ultrafast-laser-ttm-toolbox';
-manifest.note            = ['.mat files are the authoritative full-precision ' ...
-    'fixtures; in the JSON companions NaN/Inf serialize as null.'];
-manifest.cases           = {};
+manifestPath = fullfile(fixturesDir, 'manifest.json');
+if ~isempty(varargin) && exist(manifestPath, 'file')
+    % Selective regeneration: keep the other cases' manifest entries
+    manifest = jsondecode(fileread(manifestPath));
+    if isstruct(manifest.cases)
+        manifest.cases = num2cell(manifest.cases);
+    end
+    manifest.matlabVersion  = version;
+    manifest.toolboxVersion = strtrim(fileread(fullfile(matlabRepo, 'VERSION')));
+else
+    manifest = struct();
+    manifest.matlabVersion   = version;
+    manifest.toolboxVersion  = strtrim(fileread(fullfile(matlabRepo, 'VERSION')));
+    manifest.generatedBy     = 'validation/generate_fixtures.m';
+    manifest.sourceRepo      = 'https://github.com/dfieser/ultrafast-laser-ttm-toolbox';
+    manifest.note            = ['.mat files are the authoritative full-precision ' ...
+        'fixtures; in the JSON companions NaN/Inf serialize as null.'];
+    manifest.cases           = {};
+end
 
 caseList = buildCaseList(fixturesDir);
+if ~isempty(varargin)
+    keep = cellfun(@(c) any(strcmp(c.name, varargin)), caseList);
+    assert(any(keep), 'No fixture cases match: %s', strjoin(varargin, ', '));
+    caseList = caseList(keep);
+end
 
 for i = 1:numel(caseList)
     c = caseList{i};
@@ -65,7 +85,13 @@ for i = 1:numel(caseList)
         fprintf(2, '>>> CASE FAILED: %s\n%s\n', c.name, ...
             getReport(ME, 'extended', 'hyperlinks', 'off'));
     end
-    manifest.cases{end+1} = entry;
+    existingNames = cellfun(@(e) e.name, manifest.cases, 'UniformOutput', false);
+    hit = find(strcmp(existingNames, entry.name), 1);
+    if isempty(hit)
+        manifest.cases{end+1} = entry;
+    else
+        manifest.cases{hit} = entry;
+    end
     writeJson(fullfile(fixturesDir, 'manifest.json'), manifest);  % persist progress
 end
 
@@ -96,6 +122,9 @@ cases{end+1} = mkcase('surface_point_cu', 'Surface_Point_Solver', c2);
 
 c3 = cfg; c3.pulseProfile = 'square'; c3.outputDir = outDir('surface_point_square');
 cases{end+1} = mkcase('surface_point_square', 'Surface_Point_Solver', c3);
+
+c4 = cfg; c4.material = 'Au'; c4.outputDir = outDir('surface_point_au');
+cases{end+1} = mkcase('surface_point_au', 'Surface_Point_Solver', c4);
 
 % ---- Single pulse (solver defaults at the W example laser settings) -----
 cfg = W40; cfg.outputDir = outDir('single_pulse_baseline');
@@ -129,6 +158,12 @@ cfg = W40; cfg.simDuration = 100 / cfg.f_rep;
 cfg.Nr = 80; cfg.rMax_factor = 4; cfg.radialSolveMode = 'scale';
 cfg.outputDir = outDir('radial_profile_baseline');
 cases{end+1} = mkcase('radial_profile_baseline', 'Radial_Profile_Solver', cfg);
+
+% ---- Radial profile: independent mode (per-node 0D solves) --------------
+cfg = W40; cfg.simDuration = 20 / cfg.f_rep;
+cfg.Nr = 40; cfg.rMax_factor = 4; cfg.radialSolveMode = 'independent';
+cfg.outputDir = outDir('radial_profile_independent');
+cases{end+1} = mkcase('radial_profile_independent', 'Radial_Profile_Solver', cfg);
 
 % ---- Scanning beam: reduced case first ----------------------------------
 p = scanningBaselineParams();
