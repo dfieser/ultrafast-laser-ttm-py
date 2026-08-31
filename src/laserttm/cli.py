@@ -36,11 +36,11 @@ import sys
 
 
 def _cmd_list(_args: argparse.Namespace) -> int:
-    from .runtools import SOLVER_DESCRIPTIONS, SOLVERS
+    from .runtools import SOLVER_DESCRIPTIONS
 
-    width = max(len(s) for s in SOLVERS)
-    for sid in SOLVERS:
-        print(f"  {sid:<{width}}  {SOLVER_DESCRIPTIONS.get(sid, '')}")
+    width = max(len(s) for s in SOLVER_DESCRIPTIONS)
+    for sid, desc in SOLVER_DESCRIPTIONS.items():
+        print(f"  {sid:<{width}}  {desc}")
     return 0
 
 
@@ -53,12 +53,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print("error: config file must contain a JSON object", file=sys.stderr)
         return 2
 
-    solver_id = args.solver or cfg.pop("solver", None)
+    cfg_solver = cfg.pop("solver", None)
+    solver_id = args.solver or cfg_solver
     if solver_id is None:
         print("error: no solver given (use --solver or a 'solver' key in "
               "the config)", file=sys.stderr)
         return 2
-    cfg.pop("solver", None)
 
     # Batch-friendly default: no figure windows unless asked for.
     if args.plots:

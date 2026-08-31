@@ -27,7 +27,14 @@ import multiprocessing as mp
 import os
 import time
 import uuid
+from collections import deque
 from typing import Any
+
+# Files each run directory holds, shared by the worker and the tools.
+_LOG_NAME = "log.txt"
+_SUMMARY_NAME = "summary.json"
+_ERROR_NAME = "error.json"
+_RESULTS_NAME = "results.npz"
 
 try:
     from mcp.server.mcpserver import MCPServer  # mcp >= 2
@@ -55,7 +62,7 @@ def _run_job(solver_id: str, cfg: dict, run_dir: str) -> None:
     import sys
     import traceback
 
-    log_path = os.path.join(run_dir, "log.txt")
+    log_path = os.path.join(run_dir, _LOG_NAME)
     with open(log_path, "w", buffering=1, encoding="utf-8") as log:
         sys.stdout = log
         sys.stderr = log
@@ -70,12 +77,12 @@ def _run_job(solver_id: str, cfg: dict, run_dir: str) -> None:
             cfg.setdefault("outputDir", run_dir)
 
             results = get_solver(solver_id)(cfg)
-            save_results_npz(results, os.path.join(run_dir, "results.npz"))
+            save_results_npz(results, os.path.join(run_dir, _RESULTS_NAME))
             summary = summarize_results(results, max_array=200)
-            with open(os.path.join(run_dir, "summary.json"), "w") as f:
+            with open(os.path.join(run_dir, _SUMMARY_NAME), "w") as f:
                 json.dump(summary, f, indent=2)
         except Exception:
-            with open(os.path.join(run_dir, "error.json"), "w") as f:
+            with open(os.path.join(run_dir, _ERROR_NAME), "w") as f:
                 json.dump({"traceback": traceback.format_exc()}, f, indent=2)
             raise
 
@@ -92,14 +99,18 @@ mcp = MCPServer(
 )
 
 
-def _status(run_id: str) -> dict[str, Any]:
+def _run_dir(run_id: str) -> str:
     if run_id not in _RUNS:
         raise KeyError(f"Unknown run id '{run_id}'. Known: {sorted(_RUNS)}")
+    return _RUNS[run_id]["dir"]
+
+
+def _status(run_id: str) -> dict[str, Any]:
+    run_dir = _run_dir(run_id)
     run = _RUNS[run_id]
-    run_dir = run["dir"]
-    if os.path.exists(os.path.join(run_dir, "summary.json")):
+    if os.path.exists(os.path.join(run_dir, _SUMMARY_NAME)):
         status = "done"
-    elif os.path.exists(os.path.join(run_dir, "error.json")):
+    elif os.path.exists(os.path.join(run_dir, _ERROR_NAME)):
         status = "failed"
     elif run["process"].is_alive():
         status = "running"
@@ -115,11 +126,11 @@ def _status(run_id: str) -> dict[str, Any]:
 
 
 def _log_tail(run_dir: str, lines: int) -> str:
-    log_path = os.path.join(run_dir, "log.txt")
+    log_path = os.path.join(run_dir, _LOG_NAME)
     if not os.path.exists(log_path):
         return ""
     with open(log_path, encoding="utf-8", errors="replace") as f:
-        return "".join(f.readlines()[-lines:])
+        return "".join(deque(f, maxlen=lines))
 
 
 @mcp.tool()
@@ -162,7 +173,7 @@ def check_run(run_id: str, log_lines: int = 15) -> dict[str, Any]:
     out = _status(run_id)
     out["log_tail"] = _log_tail(out["run_dir"], log_lines)
     if out["status"] == "failed":
-        err_path = os.path.join(out["run_dir"], "error.json")
+        err_path = os.path.join(out["run_dir"], _ERROR_NAME)
         if os.path.exists(err_path):
             with open(err_path) as f:
                 out["error"] = json.load(f).get("traceback", "")
@@ -181,16 +192,16 @@ def get_results(run_id: str) -> dict[str, Any]:
     out = _status(run_id)
     if out["status"] != "done":
         return out
-    with open(os.path.join(out["run_dir"], "summary.json")) as f:
+    with open(os.path.join(out["run_dir"], _SUMMARY_NAME)) as f:
         out["results"] = json.load(f)
-    out["results_npz"] = os.path.join(out["run_dir"], "results.npz")
+    out["results_npz"] = os.path.join(out["run_dir"], _RESULTS_NAME)
     return out
 
 
 @mcp.tool()
 def get_log(run_id: str, tail_lines: int = 60) -> str:
     """Return the last lines of a run's captured solver output."""
-    return _log_tail(_status(run_id)["run_dir"], tail_lines)
+    return _log_tail(_run_dir(run_id), tail_lines)
 
 
 @mcp.tool()

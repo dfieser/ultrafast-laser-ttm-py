@@ -179,7 +179,7 @@ def scanning_beam_solver(params: dict | None = None,
     np_done = 0
     while np_done < n_pulses:
         np_next = min(np_done + progress_interval, n_pulses)
-        scanning_chunk(np_done, np_next, n_pulses,
+        scanning_chunk(np_done, np_next,
                        tsurf, tpeak_map, tz, peak_t_history,
                        x_grid, gy_gauss, inv2w2, v_scan, trep, dteq_single, t0,
                        depth_is_exp, exp_decay_z, box_mask_z,

@@ -7,6 +7,8 @@ write a PNG, mirroring the MATLAB ``saveFigures`` behavior.
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 
@@ -23,8 +25,6 @@ def _time_scale(t_end: float) -> tuple[float, str]:
 
 def _save_fig(fig, save_dir, name, case_tag=""):
     """Save a figure the way the MATLAB solvers do (sanitized figure name)."""
-    import re
-
     if save_dir is None:
         return None
     tag = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")

@@ -33,6 +33,9 @@ _PRESETS = {
 }
 
 
+_trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+
+
 def _matlab_round(x: float) -> int:
     """MATLAB round(): half away from zero (positive args here)."""
     return int(np.floor(x + 0.5))
@@ -118,6 +121,14 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     relax_tol = 1e-6
     relax_max_t = min(trep / 2.0, 50.0 * tau_fwhm)
 
+    # Loop-invariant deposit shape and coast sampling stride
+    depth_is_exp = str(depth_profile).lower() == "exponential"
+    exp_decay_z = np.exp(-z_grid / leff)
+    box_mask_z = z_grid <= leff
+    n_coast_sample = min(n_diff, 50)
+    sample_interval = max(1, n_diff // n_coast_sample)
+    progress_interval = max(1, n_pulses // 20)
+
     cell_times: list[np.ndarray] = []
     cell_te: list[np.ndarray] = []
     cell_tl: list[np.ndarray] = []
@@ -167,13 +178,11 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
 
         if coast_gap > 0:
             # Set initial depth profile from post-pulse Teq
-            if str(depth_profile).lower() == "exponential":
-                tz = tz + (teq - tz[0]) * np.exp(-z_grid / leff)
+            if depth_is_exp:
+                tz = tz + (teq - tz[0]) * exp_decay_z
             else:  # 'box' and the MATLAB otherwise-branch
-                tz[z_grid <= leff] = teq
+                tz[box_mask_z] = teq
 
-            n_coast_sample = min(n_diff, 50)
-            sample_interval = max(1, n_diff // n_coast_sample)
             tz, c_t, c_tl = cn_coast_const(
                 tz, coast_gap, n_diff, alpha_l, dz, t0, t_fine_end, sample_interval
             )
@@ -189,9 +198,10 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         te_now = tresidual
         tl_now = tresidual
 
-        print(f"    Pulse {np_i + 1}/{n_pulses}: Te_peak={loc_te.max():.1f} K, "
-              f"Teq={teq:.1f} K, Tresid={tresidual:.1f} K  "
-              f"({loc_t.size} fine + {cell_coast_t[-1].size} diff steps)")
+        if (np_i + 1) % progress_interval == 0 or np_i + 1 == n_pulses:
+            print(f"    Pulse {np_i + 1}/{n_pulses}: Te_peak={loc_te.max():.1f} K, "
+                  f"Teq={teq:.1f} K, Tresid={tresidual:.1f} K  "
+                  f"({loc_t.size} fine + {cell_coast_t[-1].size} diff steps)")
         progress.update(np_i + 1)
 
     progress.close()
@@ -282,8 +292,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     t_ss_c = t_ss_k - 273.15
 
     # Energy conservation check (approximate in the hybrid 0D+1D model)
-    trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
-    du_depth = cl * trapezoid(tz - t0, z_grid)      # [J/m^2]
+    du_depth = cl * _trapezoid(tz - t0, z_grid)     # [J/m^2]
     absorbed_areal = absorbed * leff                # [J/m^2]
     err_rel = abs(absorbed_areal - du_depth) / max(abs(absorbed_areal),
                                                    np.finfo(float).eps) * 100.0

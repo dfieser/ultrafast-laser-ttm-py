@@ -45,6 +45,12 @@ _PRESETS = {
 
 _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 200e-12)
 
+# Surface inversion threshold [K], shared by the per-pulse metrics and the
+# whole-run post-processing so their counts agree.
+_INV_THRESHOLD_K = 0.5
+
+_trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+
 
 def _matlab_round(x: float) -> int:
     return int(np.floor(x + 0.5))
@@ -159,6 +165,8 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     j_pat = bmat([[tri, tri], [tri, tri]], format="csc")
 
     prof_code = profile_code(pulse_profile_name)
+    pulse_offset = 5.0 * tau_fwhm
+    relax_max_t = min(trep * 0.9, max(200.0 * tau_fwhm, 500e-12))
 
     def rhs(t, y):
         return ttm_1d_rhs(t, y, nz, dz, gamma, cl, g_ep, kl,
@@ -168,9 +176,6 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
 
     # ==================  Pulse-by-pulse two-phase simulation  ===============
     print(f"  Running two-phase simulation ({n_pulses} pulses, {2 * nz} fine ODEs)...")
-
-    pulse_offset = 5.0 * tau_fwhm
-    relax_max_t = min(trep * 0.9, max(200.0 * tau_fwhm, 500e-12))
 
     cell_times_fine: list[np.ndarray] = []
     cell_te_fine: list[np.ndarray] = []
@@ -182,7 +187,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     te_peak_per_pulse = np.zeros(n_pulses)
     tl_peak_per_pulse = np.zeros(n_pulses)
 
-    inv_threshold_pp = 0.5  # [K]
+    inv_threshold_pp = _INV_THRESHOLD_K
     inv_max_per_pulse = np.zeros(n_pulses)
     t_max_inv_per_pulse = np.full(n_pulses, np.nan)
     t_inv_onset_per_pulse = np.full(n_pulses, np.nan)
@@ -194,7 +199,6 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     # Spatial snapshots (first pulse only; used by the pending plot port)
     snap_te: list[np.ndarray] = []
     snap_tl: list[np.ndarray] = []
-    snap_t: list[float] = []
     snap_labels: list[str] = []
 
     tz_diff = t0 * np.ones(nz_diff)
@@ -207,7 +211,17 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         profile_snap_pulses = np.array([1])
     profile_snaps_tz: list[np.ndarray] = []
     profile_snaps_label: list[str] = []
-    profile_snaps_time: list[float] = []
+
+    # Loop-invariant fine-to-coarse grid overlap (depends only on the grids)
+    overlap_mask = z_grid_diff <= lz
+    overlap_any = bool(overlap_mask.any())
+    z_diff_overlap = z_grid_diff[overlap_mask]
+    beyond = np.flatnonzero(~overlap_mask)
+    first_beyond = int(beyond[0]) if beyond.size > 0 and beyond[0] > 0 else -1
+
+    n_coast_sample = min(n_diff, 50)
+    sample_interval = max(1, n_diff // n_coast_sample)
+    progress_interval = max(1, n_pulses // 20)
 
     tic_all = time.perf_counter()
     progress = ProgressReporter(n_pulses, title="laserttm: depth profile",
@@ -324,8 +338,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
                     idx = int(np.argmin(np.abs(t_sol - t_snap)))
                     snap_te.append(y_sol[idx, :nz].copy())
                     snap_tl.append(y_sol[idx, nz:].copy())
-                    snap_t.append(t_sol[idx] - t_pulse_center)
-                    dv, du = smart_time(snap_t[-1])
+                    dv, du = smart_time(t_sol[idx] - t_pulse_center)
                     snap_labels.append(f"{dv:.3g} {du}")
 
         # --- Map fine-grid end state back onto the coarse diffusion grid ---
@@ -333,21 +346,18 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         tl_end_fine = y_sol[-1, nz:]
         t_equil_fine = 0.5 * (te_end_fine + tl_end_fine)
 
-        trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
-        utot = trapezoid(0.5 * gamma * te_end_fine**2 + cl * tl_end_fine, z_grid) / lz
+        utot = _trapezoid(0.5 * gamma * te_end_fine**2 + cl * tl_end_fine, z_grid) / lz
         teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
         teq_vals[np_i - 1] = teq
 
-        overlap_mask = z_grid_diff <= lz
-        if overlap_mask.any():
+        if overlap_any:
             # np.interp clamps to the end value, matching the MATLAB
             # interp1(..., 'linear', T_equil_fine(end)) extrapolation here.
             tz_diff[overlap_mask] = np.interp(
-                z_grid_diff[overlap_mask], z_grid, t_equil_fine)
-        beyond = np.flatnonzero(~overlap_mask)
-        if beyond.size > 0 and beyond[0] > 0:
-            fb = beyond[0]
-            tz_diff[fb] = 0.5 * (tz_diff[fb - 1] + tz_diff[fb])
+                z_diff_overlap, z_grid, t_equil_fine)
+        if first_beyond > 0:
+            tz_diff[first_beyond] = 0.5 * (tz_diff[first_beyond - 1]
+                                           + tz_diff[first_beyond])
 
         # ---------------- PHASE 2: CN diffusion on the coarse grid ----------
         t_fine_end = t_sol[-1]
@@ -358,8 +368,6 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         coast_gap = t_next_pulse_start - t_fine_end
 
         if coast_gap > 0:
-            n_coast_sample = min(n_diff, 50)
-            sample_interval = max(1, n_diff // n_coast_sample)
             tz_diff, c_t, c_tl = cn_coast_kt(
                 tz_diff, coast_gap, n_diff, dz_diff, t0, cl,
                 k_tab_t, k_tab_k, t_fine_end, sample_interval)
@@ -377,12 +385,12 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
             profile_snaps_tz.append(tz_diff.copy())
             tv, tu = smart_time(np_i * trep)
             profile_snaps_label.append(f"Pulse {np_i} ({tv:.3g} {tu})")
-            profile_snaps_time.append(np_i * trep)
 
-        print(f"    Pulse {np_i}/{n_pulses}: "
-              f"Te_peak={te_peak_per_pulse[np_i - 1] - 273.15:.0f} degC, "
-              f"Teq={teq - 273.15:.1f} degC, Tresid={tresidual - 273.15:.1f} degC  "
-              f"({t_sol.size} fine + {cell_coast_t[-1].size} coast)")
+        if np_i % progress_interval == 0 or np_i == n_pulses:
+            print(f"    Pulse {np_i}/{n_pulses}: "
+                  f"Te_peak={te_peak_per_pulse[np_i - 1] - 273.15:.0f} degC, "
+                  f"Teq={teq - 273.15:.1f} degC, Tresid={tresidual - 273.15:.1f} degC  "
+                  f"({t_sol.size} fine + {cell_coast_t[-1].size} coast)")
         progress.update(np_i)
 
     progress.close()
@@ -407,8 +415,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
 
     # ==================  Post-processing  ===================================
     d_t_surf = all_tl_surf - all_te_surf
-    inv_threshold = 0.5
-    inversion_mask = d_t_surf > inv_threshold
+    inversion_mask = d_t_surf > _INV_THRESHOLD_K
     first_pulse_center = pulse_offset
 
     if inversion_mask.any():
@@ -445,9 +452,8 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
             peak_pulse = p + 1
             break
 
-    trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
     e_input = n_pulses * eabs_areal
-    du_depth = cl * trapezoid(tz_diff - t0, z_grid_diff)
+    du_depth = cl * _trapezoid(tz_diff - t0, z_grid_diff)
 
     # ==================  Print results  =====================================
     print("\n============================================================")
@@ -604,7 +610,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
 
     print("Done.")
 
-    results = {
+    return {
         "solver": "1D",
         "solverId": "depth_profile",
         "contractVersion": "v1",
@@ -647,4 +653,3 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         "Trep": trep,
         "simDuration": sim_duration,
     }
-    return results

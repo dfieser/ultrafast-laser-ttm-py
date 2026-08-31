@@ -108,7 +108,10 @@ def rk4_pulse_phase(t_pulse, t_start, te0, tl0,
     Returns (times, Te, Tl, absorbed) where absorbed is the trapezoidal
     integral of the volumetric source over the phase [J/m^3].
     """
-    buf = 100000
+    # Typical phases take a few hundred steps; the grow-by-buf path below
+    # handles the rare longer relaxation. (MATLAB used a 100000 block, which
+    # cost three 800 KB allocations per pulse for nothing.)
+    buf = 4096
     loc_t = np.empty(buf)
     loc_te = np.empty(buf)
     loc_tl = np.empty(buf)
@@ -499,16 +502,15 @@ def cn_depth_multi_kt(tz_all, active, n_steps, dt, dz, tamb, cl,
     c_tl = np.empty(n_samples)
 
     nr = tz_all.shape[1]
-    dt_diff = dt
     j = 0
     for di in range(1, n_steps + 1):
         for ri in range(nr):
             if not active[ri]:
                 continue
             tz_all[:, ri] = crank_nicolson_step_kt(
-                tz_all[:, ri].copy(), dt_diff, dz, tamb, cl, k_tab_t, k_tab_k)
+                tz_all[:, ri].copy(), dt, dz, tamb, cl, k_tab_t, k_tab_k)
         if di % sample_interval == 0 or di == n_steps:
-            c_t[j] = t_fine_end + di * dt_diff
+            c_t[j] = t_fine_end + di * dt
             c_tl[j] = tz_all[0, 0]
             j += 1
     return c_t, c_tl
@@ -592,7 +594,7 @@ def _thomas_solve_prefactored(m, bp, c, d, x):
 
 
 @njit(cache=True)
-def scanning_chunk(np_start, np_end, n_pulses,
+def scanning_chunk(np_start, np_end,
                    tsurf, tpeak, tz, peak_hist,
                    x_grid, gy_gauss, inv2w2, v_scan, trep, dteq_single, t0,
                    depth_is_exp, exp_decay_z, box_mask_z,
@@ -659,15 +661,14 @@ def scanning_chunk(np_start, np_end, n_pulses,
         peak_hist[np_i] = peak_surf
 
         # --- Depth CN coast with survival scaling ---
-        tsurf_max = peak_surf
         if depth_is_exp:
-            delta = tsurf_max - tz[0]
+            delta = peak_surf - tz[0]
             for iz in range(tz.size):
                 tz[iz] = tz[iz] + delta * exp_decay_z[iz]
         else:
             for iz in range(tz.size):
                 if box_mask_z[iz]:
-                    tz[iz] = tsurf_max
+                    tz[iz] = peak_surf
         tsurf_max_before = tz[0]
 
         for _ in range(ndiff):

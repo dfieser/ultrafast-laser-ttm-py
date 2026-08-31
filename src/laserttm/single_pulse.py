@@ -33,6 +33,8 @@ _PRESETS = {
 
 _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 200e-12)
 
+_trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
+
 
 def single_pulse_visualizer(cfg: dict | None = None) -> dict:
     """Run the single-pulse 1D TTM solver. Returns the v1 results dict."""
@@ -134,7 +136,6 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
     all_tl_l: list[np.ndarray] = []
     snap_te: list[np.ndarray] = []
     snap_tl: list[np.ndarray] = []
-    snap_t: list[float] = []
     snap_labels: list[str] = []
     te_peak_per_pulse = np.zeros(n_pulses)
     tl_peak_per_pulse = np.zeros(n_pulses)
@@ -218,8 +219,7 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
                     idx = int(np.argmin(np.abs(t_sol - t_snap)))
                     snap_te.append(y_sol[idx, :nz].copy())
                     snap_tl.append(y_sol[idx, nz:].copy())
-                    snap_t.append(t_sol[idx] - t_pulse_center)
-                    dv, du = smart_time(snap_t[-1])
+                    dv, du = smart_time(t_sol[idx] - t_pulse_center)
                     snap_labels.append(f"{dv:.3g} {du}")
 
         te_peak_per_pulse[np_i - 1] = te_s.max()
@@ -273,11 +273,10 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
     t_peak_te_rel = all_times[idx_te_peak] - first_pulse_center
     pk_te_v, pk_te_u = smart_time(t_peak_te_rel)
 
-    trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
     te_end = y_current[:nz]
     tl_end = y_current[nz:]
-    du_e = trapezoid(0.5 * gamma * (te_end**2 - t0**2), z_grid)
-    du_l = trapezoid(cl * (tl_end - t0), z_grid)
+    du_e = _trapezoid(0.5 * gamma * (te_end**2 - t0**2), z_grid)
+    du_l = _trapezoid(cl * (tl_end - t0), z_grid)
     du_total = du_e + du_l
     e_input = n_pulses * eabs_areal
 
@@ -406,7 +405,7 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
 
     print("Done.")
 
-    results = {
+    return {
         "solver": "SinglePulse",
         "solverId": "single_pulse",
         "contractVersion": "v1",
@@ -420,6 +419,5 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
         "outputDir": output_dir,
         "inputConfig": cfg,
         "invDetected": inv_detected,
-        "maxInv_C": max_inv if inv_detected else 0,
+        "maxInv_C": max_inv,
     }
-    return results

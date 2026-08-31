@@ -124,8 +124,8 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
 
     print("\n  === Inversion Summary ===")
     print(f"  Mean inversion:    {mean_inv:.2f} K")
-    max_pulse = inv_pulse_idx[inv_max_valid == max_inv_all]
-    print(f"  Max inversion:     {max_inv_all:.2f} K  (pulse {int(max_pulse[0])})")
+    max_pulse = int(inv_pulse_idx[int(np.argmax(inv_max_valid))])
+    print(f"  Max inversion:     {max_inv_all:.2f} K  (pulse {max_pulse})")
     print(f"  Min inversion:     {min_inv:.2f} K")
     print(f"  Std dev:           {std_inv:.2f} K")
     print(f"  First pulse inv:   {first_inv:.2f} K  (Tbase = {tbase_valid[0]:.1f} C)")
@@ -257,7 +257,7 @@ def _build_results(cfg, dr, n_pulses, material, inv_max, te_peak, tl_peak,
                    te_at_inv, tl_at_inv,
                    n_inv_pulses, mean_inv, max_inv_all, min_inv, std_inv,
                    inv_slope, r_corr, mean_inv_fraction, out_path, output_dir):
-    input_cfg = {k: v for k, v in dict(cfg).items() if k != "depthResults"}
+    input_cfg = {k: v for k, v in cfg.items() if k != "depthResults"}
     return {
         "solver": "Inversion",
         "solverId": "inversion_quantifier",

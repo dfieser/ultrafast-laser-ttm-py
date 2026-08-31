@@ -47,6 +47,33 @@ def _matlab_round(x: float) -> int:
     return int(np.floor(x + 0.5))
 
 
+def _melt_radius_um(t_surf_c: np.ndarray, r_grid: np.ndarray,
+                    t_melt_c: float) -> float:
+    """Interpolated radius [um] where the surface profile crosses t_melt_c."""
+    below = np.flatnonzero(t_surf_c < t_melt_c)
+    if below.size > 0 and below[0] > 0:
+        ib = below[0]
+        return float(np.interp(
+            t_melt_c,
+            t_surf_c[ib - 1: ib + 1][::-1],
+            (r_grid[ib - 1: ib + 1] * 1e6)[::-1]))
+    return 0.0
+
+
+def _early_stop_hit(t_surf_k: np.ndarray, r_grid: np.ndarray, t_melt_c: float,
+                    target_um: float, pulse_no: int) -> bool:
+    """True when the melt radius has reached the early-stop target."""
+    t_surf_c = t_surf_k - 273.15
+    if t_surf_c[0] < t_melt_c:
+        return False
+    cur_melt_r = _melt_radius_um(t_surf_c, r_grid, t_melt_c)
+    if cur_melt_r >= target_um:
+        print(f"    >>> Early stop at pulse {pulse_no}: melt radius "
+              f"{cur_melt_r:.2f} um >= target {target_um:.2f} um")
+        return True
+    return False
+
+
 def radial_profile_solver(cfg: dict | None = None) -> dict:
     """Run the radial-profile TTM solver. Returns the v1 results dict."""
     if cfg is None:
@@ -91,6 +118,10 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     r_max_factor = get_cfg_field(cfg, "rMax_factor", 5)
 
     radial_solve_mode = str(get_cfg_field(cfg, "radialSolveMode", "scale")).lower()
+    if radial_solve_mode not in ("scale", "independent"):
+        raise ValueError(
+            f'Unknown radialSolveMode "{radial_solve_mode}". '
+            "Use 'scale' or 'independent'.")
 
     sim_duration = get_cfg_field(cfg, "simDuration", 1e-3)
 
@@ -135,7 +166,6 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     ldiff = max(5.0 * np.sqrt(alpha_l * sim_duration), 50e-6)
     dz = dz_target
     nz = int(np.ceil(ldiff / dz)) + 1
-    ldiff = (nz - 1) * dz
     z_grid = np.arange(nz) * dz
 
     # Radial grid
@@ -168,6 +198,11 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     relax_max_t = min(trep / 2.0, 50.0 * tau_fwhm)
     prof_code = profile_code(pulse_profile_name)
 
+    # Loop-invariant deposit shape (same precompute as scanning_beam)
+    depth_is_exp = depth_profile == "exponential"
+    exp_decay_z = np.exp(-z_grid / leff)
+    box_mask_z = z_grid <= leff
+
     cell_times: list[np.ndarray] = []
     cell_tl: list[np.ndarray] = []
     cell_coast_t: list[np.ndarray] = []
@@ -175,7 +210,6 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     teq_vals = np.zeros(n_pulses)
     tresid_vals = np.zeros(n_pulses)
     tresid_radial = np.zeros((n_pulses, nr))
-    teq_radial = np.zeros((n_pulses, nr))
 
     n_profile_snaps = min(n_pulses, 12)
     if n_pulses > 1:
@@ -230,10 +264,10 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
             coast_gap = t_next_start - t_fine_end
 
             if coast_gap > 0:
-                if depth_profile == "exponential":
-                    tz = tz + (teq - tz[0]) * np.exp(-z_grid / leff)
+                if depth_is_exp:
+                    tz = tz + (teq - tz[0]) * exp_decay_z
                 else:  # 'box' and the MATLAB otherwise-branch
-                    tz[z_grid <= leff] = teq
+                    tz[box_mask_z] = teq
 
                 n_diff_local = max(n_diff, int(np.ceil(
                     alpha_l * coast_gap / (f_target * dz**2))))
@@ -275,46 +309,14 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
             progress.update(np_i + 1)
 
             # --- Early stop check ---
-            if early_stop_enabled and (np_i + 1) % early_stop_check_interval == 0:
-                tr_surf_c = tr_surf - 273.15
-                if tr_surf_c[0] >= early_stop_t_melt_c:
-                    below = np.flatnonzero(tr_surf_c < early_stop_t_melt_c)
-                    if below.size > 0 and below[0] > 0:
-                        ib = below[0]
-                        cur_melt_r = np.interp(
-                            early_stop_t_melt_c,
-                            tr_surf_c[ib - 1: ib + 1][::-1],
-                            (r_grid[ib - 1: ib + 1] * 1e6)[::-1])
-                    else:
-                        cur_melt_r = 0.0
-                    if cur_melt_r >= early_stop_melt_radius_um:
-                        print(f"    >>> Early stop at pulse {np_i + 1}: melt radius "
-                              f"{cur_melt_r:.2f} um >= target "
-                              f"{early_stop_melt_radius_um:.2f} um")
-                        n_pulses_run = np_i + 1
-                        break
+            if (early_stop_enabled
+                    and (np_i + 1) % early_stop_check_interval == 0
+                    and _early_stop_hit(tr_surf, r_grid, early_stop_t_melt_c,
+                                        early_stop_melt_radius_um, np_i + 1)):
+                n_pulses_run = np_i + 1
+                break
 
-        n_pulses = n_pulses_run
-        cell_times = cell_times[:n_pulses]
-        cell_tl = cell_tl[:n_pulses]
-        cell_coast_t = cell_coast_t[:n_pulses]
-        cell_coast_tl = cell_coast_tl[:n_pulses]
-        teq_vals = teq_vals[:n_pulses]
-        tresid_vals = tresid_vals[:n_pulses]
-        tresid_radial = tresid_radial[:n_pulses, :]
-
-        progress.close()
-        wall_time = time.perf_counter() - tic_all
-        print(f"  Wall time: {wall_time:.2f} s")
-
-        profile_snap_pulses = profile_snap_pulses[profile_snap_pulses <= n_pulses]
-        snap_radial_profiles = tresid_radial[profile_snap_pulses - 1, :]
-        profile_snaps_label = []
-        for p in profile_snap_pulses:
-            tv, tu = smart_time(p * trep)
-            profile_snaps_label.append(f"Pulse {p} ({tv:.3g} {tu})")
-
-    elif radial_solve_mode == "independent":
+    else:
         print(f"  Running independent 0D solves at {nr} radial nodes (pulse-major)...")
 
         te_all = t0 * np.ones(nr)
@@ -331,7 +333,6 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
             # --- Phase 1: RK4 TTM at each radial node ---
             for ri in range(nr):
                 if not active[ri]:
-                    teq_radial[np_i, ri] = te_all[ri]
                     continue
 
                 loc_t, loc_te, loc_tl, _ = rk4_pulse_phase(
@@ -349,16 +350,15 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
 
                 utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
                 teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
-                teq_radial[np_i, ri] = teq
                 if ri == 0:
                     teq_vals[np_i] = teq
 
                 # Deposit pulse energy into this node's depth profile
-                if depth_profile == "exponential":
+                if depth_is_exp:
                     tz_all[:, ri] = tz_all[:, ri] \
-                        + (teq - tz_all[0, ri]) * np.exp(-z_grid / leff)
+                        + (teq - tz_all[0, ri]) * exp_decay_z
                 else:
-                    tz_all[z_grid <= leff, ri] = teq
+                    tz_all[box_mask_z, ri] = teq
                 te_all[ri] = teq
                 tl_all[ri] = teq
 
@@ -418,50 +418,33 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
             progress.update(np_i + 1)
 
             # --- Early stop check ---
-            if early_stop_enabled and (np_i + 1) % early_stop_check_interval == 0:
-                te_all_c = te_all - 273.15
-                if te_all_c[0] >= early_stop_t_melt_c:
-                    below = np.flatnonzero(te_all_c < early_stop_t_melt_c)
-                    if below.size > 0 and below[0] > 0:
-                        ib = below[0]
-                        cur_melt_r = np.interp(
-                            early_stop_t_melt_c,
-                            te_all_c[ib - 1: ib + 1][::-1],
-                            (r_grid[ib - 1: ib + 1] * 1e6)[::-1])
-                    else:
-                        cur_melt_r = 0.0
-                    if cur_melt_r >= early_stop_melt_radius_um:
-                        print(f"    >>> Early stop at pulse {np_i + 1}: melt radius "
-                              f"{cur_melt_r:.2f} um >= target "
-                              f"{early_stop_melt_radius_um:.2f} um")
-                        n_pulses_run = np_i + 1
-                        break
+            if (early_stop_enabled
+                    and (np_i + 1) % early_stop_check_interval == 0
+                    and _early_stop_hit(te_all, r_grid, early_stop_t_melt_c,
+                                        early_stop_melt_radius_um, np_i + 1)):
+                n_pulses_run = np_i + 1
+                break
 
-        n_pulses = n_pulses_run
-        cell_times = cell_times[:n_pulses]
-        cell_tl = cell_tl[:n_pulses]
-        cell_coast_t = cell_coast_t[:n_pulses]
-        cell_coast_tl = cell_coast_tl[:n_pulses]
-        teq_vals = teq_vals[:n_pulses]
-        tresid_vals = tresid_vals[:n_pulses]
-        tresid_radial = tresid_radial[:n_pulses, :]
-        teq_radial = teq_radial[:n_pulses, :]
+    # ==================  Shared epilogue (both modes)  ======================
+    n_pulses = n_pulses_run
+    cell_times = cell_times[:n_pulses]
+    cell_tl = cell_tl[:n_pulses]
+    cell_coast_t = cell_coast_t[:n_pulses]
+    cell_coast_tl = cell_coast_tl[:n_pulses]
+    teq_vals = teq_vals[:n_pulses]
+    tresid_vals = tresid_vals[:n_pulses]
+    tresid_radial = tresid_radial[:n_pulses, :]
 
-        progress.close()
-        wall_time = time.perf_counter() - tic_all
-        print(f"  Wall time: {wall_time:.2f} s")
+    progress.close()
+    wall_time = time.perf_counter() - tic_all
+    print(f"  Wall time: {wall_time:.2f} s")
 
-        profile_snap_pulses = profile_snap_pulses[profile_snap_pulses <= n_pulses]
-        snap_radial_profiles = tresid_radial[profile_snap_pulses - 1, :]
-        profile_snaps_label = []
-        for p in profile_snap_pulses:
-            tv, tu = smart_time(p * trep)
-            profile_snaps_label.append(f"Pulse {p} ({tv:.3g} {tu})")
-
-    else:
-        raise ValueError(
-            f'Unknown radialSolveMode "{radial_solve_mode}". '
-            "Use 'scale' or 'independent'.")
+    profile_snap_pulses = profile_snap_pulses[profile_snap_pulses <= n_pulses]
+    snap_radial_profiles = tresid_radial[profile_snap_pulses - 1, :]
+    profile_snaps_label = []
+    for p in profile_snap_pulses:
+        tv, tu = smart_time(p * trep)
+        profile_snaps_label.append(f"Pulse {p} ({tv:.3g} {tu})")
 
     # ==================  Stitch centre-point time history  ==================
     if store_history:
@@ -580,7 +563,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
             save_dir=(output_dir if save_figures else None))
         print("Done.")
 
-    results = {
+    return {
         "solver": "Radial",
         "solverId": "radial_profile",
         "contractVersion": "v1",
@@ -597,4 +580,3 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         "finalRadialProfile_C": tresid_radial[-1, :] - 273.15,
         "spotRadius_um": spot_radius * 1e6,
     }
-    return results

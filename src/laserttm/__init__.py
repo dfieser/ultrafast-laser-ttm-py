@@ -4,15 +4,21 @@ Python port of the Ultrafast Laser TTM Toolbox (MATLAB reference
 implementation for doi:10.1007/s11665-026-14738-6).
 """
 
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
-from .depth_profile import depth_profile_solver
-from .inversion_quantifier import inversion_quantifier
-from .radial_profile import radial_profile_solver
-from .scanning_beam import scanning_beam_solver
-from .single_pulse import single_pulse_visualizer
-from .surface_point import surface_point_solver
+# Solver entry points, resolved lazily (PEP 562): the solver modules import
+# numba and scipy, which costs about a second per process. `laserttm list`,
+# `laserttm version`, and MCP server startup never touch them.
+_SOLVER_EXPORTS = {
+    "depth_profile_solver": "depth_profile",
+    "inversion_quantifier": "inversion_quantifier",
+    "radial_profile_solver": "radial_profile",
+    "scanning_beam_solver": "scanning_beam",
+    "single_pulse_visualizer": "single_pulse",
+    "surface_point_solver": "surface_point",
+}
 
 # Single source of truth is the VERSION file at the repository root: the
 # build backend stamps it into the package metadata (see [tool.hatch.version]
@@ -38,3 +44,16 @@ __all__ = [
     "single_pulse_visualizer",
     "surface_point_solver",
 ]
+
+
+def __getattr__(name: str):
+    module_name = _SOLVER_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f".{module_name}", __name__), name)
+    globals()[name] = value  # cache so the import runs once
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_SOLVER_EXPORTS))

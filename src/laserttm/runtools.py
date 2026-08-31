@@ -9,46 +9,60 @@ JSON-safe structures for machine consumers.
 from __future__ import annotations
 
 from collections.abc import Callable
+from importlib import import_module
 from typing import Any
 
 import numpy as np
 
-from .depth_profile import depth_profile_solver
-from .inversion_quantifier import inversion_quantifier
-from .radial_profile import radial_profile_solver
-from .scanning_beam import scanning_beam_solver
-from .single_pulse import single_pulse_visualizer
-from .surface_point import surface_point_solver
-
-SOLVERS: dict[str, Callable[[dict | None], dict]] = {
-    "surface_point": surface_point_solver,
-    "depth_profile": depth_profile_solver,
-    "radial_profile": radial_profile_solver,
-    "single_pulse": single_pulse_visualizer,
-    "inversion_quantifier": inversion_quantifier,
-    "scanning_beam": scanning_beam_solver,
+# One registry row per solver: (module, attribute, description). Solver
+# modules pull in numba and scipy, so the callables are resolved lazily:
+# listing solvers must stay import-free to keep the CLI and MCP server
+# startup fast.
+_REGISTRY: dict[str, tuple[str, str, str]] = {
+    "surface_point": (
+        "surface_point", "surface_point_solver",
+        ("0D surface Te/Tl with inter-pulse depth diffusion "
+         "(fastest accumulation studies)")),
+    "depth_profile": (
+        "depth_profile", "depth_profile_solver",
+        ("1D depth-resolved Te(z,t), Tl(z,t) with stiff BDF "
+         "integration (main multi-pulse workflow)")),
+    "radial_profile": (
+        "radial_profile", "radial_profile_solver",
+        ("radial surface temperature under a Gaussian spot "
+         "(melt-radius and footprint studies)")),
+    "single_pulse": (
+        "single_pulse", "single_pulse_visualizer",
+        "one pulse with depth snapshots at chosen delays"),
+    "inversion_quantifier": (
+        "inversion_quantifier", "inversion_quantifier",
+        "per-pulse Tl>Te inversion statistics"),
+    "scanning_beam": (
+        "scanning_beam", "scanning_beam_solver",
+        "2D surface temperature under a moving beam"),
 }
 
 SOLVER_DESCRIPTIONS: dict[str, str] = {
-    "surface_point": "0D surface Te/Tl with inter-pulse depth diffusion "
-                     "(fastest accumulation studies)",
-    "depth_profile": "1D depth-resolved Te(z,t), Tl(z,t) with stiff BDF "
-                     "integration (main multi-pulse workflow)",
-    "radial_profile": "radial surface temperature under a Gaussian spot "
-                      "(melt-radius and footprint studies)",
-    "single_pulse": "one pulse with depth snapshots at chosen delays",
-    "inversion_quantifier": "per-pulse Tl>Te inversion statistics",
-    "scanning_beam": "2D surface temperature under a moving beam",
+    sid: row[2] for sid, row in _REGISTRY.items()
 }
 
 
 def get_solver(solver_id: str) -> Callable[[dict | None], dict]:
     """Return the solver callable for a registry id (case-insensitive)."""
     key = solver_id.strip().lower()
-    if key not in SOLVERS:
-        known = ", ".join(sorted(SOLVERS))
+    if key not in _REGISTRY:
+        known = ", ".join(sorted(_REGISTRY))
         raise KeyError(f"Unknown solver '{solver_id}'. Known solvers: {known}")
-    return SOLVERS[key]
+    module_name, attr, _ = _REGISTRY[key]
+    return getattr(import_module(f".{module_name}", __package__), attr)
+
+
+def __getattr__(name: str) -> Any:
+    # SOLVERS stays available for callers that want the full id->callable
+    # map; building it imports every solver, so it is resolved on demand.
+    if name == "SOLVERS":
+        return {sid: get_solver(sid) for sid in _REGISTRY}
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def to_jsonable(value: Any, max_array: int = 10000) -> Any:
@@ -83,7 +97,7 @@ def to_jsonable(value: Any, max_array: int = 10000) -> Any:
 
 def summarize_results(results: dict, max_array: int = 200) -> dict:
     """Compact JSON-safe view of a results dict (large arrays summarized)."""
-    return {k: to_jsonable(v, max_array=max_array) for k, v in results.items()}
+    return to_jsonable(results, max_array=max_array)
 
 
 def save_results_npz(results: dict, path: str) -> str:
