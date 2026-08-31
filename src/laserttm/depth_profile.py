@@ -32,6 +32,7 @@ from .kernels import (
     profile_code,
     ttm_1d_rhs,
 )
+from .progress import ProgressReporter
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 # Material presets: gamma [J m^-3 K^-2], Cl [J m^-3 K^-1], G [W m^-3 K^-1],
@@ -96,6 +97,8 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
 
     rel_tol = get_cfg_field(cfg, "relTol", 1e-6)
     abs_tol = get_cfg_field(cfg, "absTol", 1e-1)
+
+    show_progress = get_cfg_field(cfg, "showProgress", None)
 
     # ==================  Material presets  ==================================
     key = str(material).lower()
@@ -207,6 +210,8 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     profile_snaps_time: list[float] = []
 
     tic_all = time.perf_counter()
+    progress = ProgressReporter(n_pulses, title="laserttm: depth profile",
+                                enabled=show_progress)
 
     for np_i in range(1, n_pulses + 1):
         t_pulse_center = pulse_offset + (np_i - 1) * trep
@@ -378,7 +383,9 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
               f"Te_peak={te_peak_per_pulse[np_i - 1] - 273.15:.0f} degC, "
               f"Teq={teq - 273.15:.1f} degC, Tresid={tresidual - 273.15:.1f} degC  "
               f"({t_sol.size} fine + {cell_coast_t[-1].size} coast)")
+        progress.update(np_i)
 
+    progress.close()
     wall_time = time.perf_counter() - tic_all
     print(f"  Simulation wall time: {wall_time:.2f} s")
 

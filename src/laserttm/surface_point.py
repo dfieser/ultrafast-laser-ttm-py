@@ -20,6 +20,7 @@ import numpy as np
 
 from .config import get_cfg_field
 from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
+from .progress import ProgressReporter
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 # Material presets: gamma [J m^-3 K^-2], Cl [J m^-3 K^-1],
@@ -73,6 +74,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     depth_profile = get_cfg_field(cfg, "depthProfile", "exponential")  # 'box'|'exponential'
     dz_target = get_cfg_field(cfg, "dzTarget", 500e-9)     # Depth grid spacing [m]
     n_diff = int(get_cfg_field(cfg, "Ndiff", 100))         # CN steps per inter-pulse period
+    show_progress = get_cfg_field(cfg, "showProgress", None)  # waitbar popup
 
     # ==================  Material Presets  ==================================
     key = str(material).lower()
@@ -131,6 +133,8 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     tz = t0 * np.ones(nz)
 
     tic_all = time.perf_counter()
+    progress = ProgressReporter(n_pulses, title="laserttm: surface point",
+                                enabled=show_progress)
 
     for np_i in range(n_pulses):
         t_pulse = pulse_offset + np_i * trep
@@ -188,7 +192,9 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         print(f"    Pulse {np_i + 1}/{n_pulses}: Te_peak={loc_te.max():.1f} K, "
               f"Teq={teq:.1f} K, Tresid={tresidual:.1f} K  "
               f"({loc_t.size} fine + {cell_coast_t[-1].size} diff steps)")
+        progress.update(np_i + 1)
 
+    progress.close()
     wall_time_s = time.perf_counter() - tic_all
     print(f"  Simulation wall time: {wall_time_s:.2f} s")
 

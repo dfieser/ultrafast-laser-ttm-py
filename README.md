@@ -140,6 +140,8 @@ All six return a results dict with the shared v1 contract fields: `solver`, `sol
 
 **Long runs:** the radial solver accepts `storeHistory: False` to drop the per-pulse time histories, which are needed only for the timeline figures. This bounds memory for accumulation studies past 100,000 pulses while leaving every physical result unchanged.
 
+**Progress popup:** the multi-pulse solvers show a waitbar with a live time estimate during interactive runs, matching the MATLAB toolbox. Set `showProgress: True` or `False` in the config to force it either way. When unset, the popup appears only for terminal runs with a display, so test suites, batch pipelines, and the MCP server stay headless. Setting the `LASERTTM_NO_PROGRESS` environment variable also disables it.
+
 ## Command line
 
 The package installs a `laserttm` console script for batch and scripted use:

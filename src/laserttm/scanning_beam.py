@@ -22,6 +22,7 @@ import numpy as np
 from scipy.io import savemat
 
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
+from .progress import ProgressReporter
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _DEFAULTS = {
@@ -173,6 +174,8 @@ def scanning_beam_solver(params: dict | None = None,
     progress_interval = min(max(1, n_pulses // 10), 5000)
 
     tic_all = time.perf_counter()
+    progress = ProgressReporter(n_pulses, title="laserttm: scanning beam",
+                                enabled=params.get("showProgress"))
     np_done = 0
     while np_done < n_pulses:
         np_next = min(np_done + progress_interval, n_pulses)
@@ -189,6 +192,8 @@ def scanning_beam_solver(params: dict | None = None,
         print(f"    Pulse {np_done}/{n_pulses} ({pct_done:.0f}%) | "
               f"Peak T={peak_t_history[np_done - 1] - 273.15:.1f} C | "
               f"Elapsed {elapsed:.1f}s | ETA {eta_s:.1f}s")
+        progress.update(np_done)
+    progress.close()
     wall_time = time.perf_counter() - tic_all
     print(f"  Wall time: {wall_time:.2f} s")
 

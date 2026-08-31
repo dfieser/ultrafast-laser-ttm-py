@@ -31,6 +31,7 @@ from .kernels import (
     radial_coast_kt,
     rk4_pulse_phase,
 )
+from .progress import ProgressReporter
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 # Material presets: gamma [J m^-3 K^-2], Cl [J m^-3 K^-1],
@@ -101,6 +102,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     depth_profile = str(get_cfg_field(cfg, "depthProfile", "exponential")).lower()
     dz_target = get_cfg_field(cfg, "dzTarget", 500e-9)
     n_diff_min = int(get_cfg_field(cfg, "Ndiff", 100))
+    show_progress = get_cfg_field(cfg, "showProgress", None)
 
     # ==================  Material presets  ==================================
     key = str(material).lower()
@@ -185,6 +187,8 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     progress_interval = max(1, n_pulses // 20)
     tic_all = time.perf_counter()
     n_pulses_run = n_pulses
+    progress = ProgressReporter(n_pulses, title="laserttm: radial profile",
+                                enabled=show_progress)
 
     if radial_solve_mode == "scale":
         print("  Running single center-point simulation...")
@@ -268,6 +272,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
             if (np_i + 1) % progress_interval == 0 or np_i + 1 == n_pulses:
                 print(f"    Pulse {np_i + 1}/{n_pulses}: "
                       f"Teq={teq - 273.15:.1f} C, Tresid={tr_surf[0] - 273.15:.1f} C")
+            progress.update(np_i + 1)
 
             # --- Early stop check ---
             if early_stop_enabled and (np_i + 1) % early_stop_check_interval == 0:
@@ -298,6 +303,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         tresid_vals = tresid_vals[:n_pulses]
         tresid_radial = tresid_radial[:n_pulses, :]
 
+        progress.close()
         wall_time = time.perf_counter() - tic_all
         print(f"  Wall time: {wall_time:.2f} s")
 
@@ -409,6 +415,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
                 print(f"    Pulse {np_i + 1}/{n_pulses}: "
                       f"Teq={teq_vals[np_i] - 273.15:.1f} C, "
                       f"Tresid={te_all[0] - 273.15:.1f} C")
+            progress.update(np_i + 1)
 
             # --- Early stop check ---
             if early_stop_enabled and (np_i + 1) % early_stop_check_interval == 0:
@@ -440,6 +447,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         tresid_radial = tresid_radial[:n_pulses, :]
         teq_radial = teq_radial[:n_pulses, :]
 
+        progress.close()
         wall_time = time.perf_counter() - tic_all
         print(f"  Wall time: {wall_time:.2f} s")
 
