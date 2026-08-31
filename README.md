@@ -74,13 +74,21 @@ All figures below come from the solvers in this repository at their baseline exa
 
 **Requirements:** Python ≥ 3.10. NumPy, SciPy, Numba, and matplotlib are installed automatically.
 
-1. Clone the repository and install the package:
+Install the latest release from PyPI:
+
+```bash
+pip install laserttm              # add "laserttm[mcp]" for the MCP server
+```
+
+Or, for development, clone the repository and install editable:
 
 ```bash
 git clone https://github.com/dfieser/ultrafast-laser-ttm-py.git
 cd ultrafast-laser-ttm-py
-pip install -e .          # add ".[dev]" for pytest + ruff
+pip install -e ".[dev]"           # pytest + ruff + the MCP extra
 ```
+
+Pin a released version (`pip install laserttm==X.Y.Z`) in environments used for real studies, and keep the editable install for development work only.
 
 2. Run a baseline example:
 
@@ -128,6 +136,44 @@ The MATLAB repo's [project wiki](https://github.com/dfieser/ultrafast-laser-ttm-
 | Scanning beam | [scanning_beam.py](src/laserttm/scanning_beam.py) | 2D surface temperature under a moving beam | translating stationary results to a scanned process |
 
 All six return a results dict with the shared v1 contract fields: `solver`, `solverId`, `contractVersion`, `material`, `outputFile`, `outputDir`, and `inputConfig`, plus `nPulses` and `wallTime_s` where meaningful — identical to the MATLAB toolbox's contract.
+
+**Long runs:** the radial solver accepts `storeHistory: False` to drop the per-pulse time histories (needed only for the timeline figures), which bounds memory for 10⁵-pulse-scale accumulation studies while leaving every physical result unchanged.
+
+## Command line
+
+The package installs a `laserttm` console script for batch and scripted use:
+
+```bash
+laserttm list                              # available solver ids
+laserttm run study.json --out results.json # run a config; also .npz output
+laserttm version
+```
+
+A config file is the solver's cfg dict plus a `solver` key, with the same field names as the Python and MATLAB interfaces:
+
+```json
+{
+  "solver": "radial_profile",
+  "material": "W",
+  "Pavg": 70,
+  "f_rep": 40e6,
+  "spotRadius": 150e-6,
+  "simDuration": 2.5e-5,
+  "storeHistory": false
+}
+```
+
+Plots are off by default in CLI runs; pass `--plots` or set `makePlots`/`saveFigures` in the config.
+
+## MCP server
+
+With the `mcp` extra installed (`pip install laserttm[mcp]`), the `laserttm-mcp` script serves every solver as [Model Context Protocol](https://modelcontextprotocol.io) tools over stdio, so AI assistants can drive simulations directly. Register it with Claude Code:
+
+```bash
+claude mcp add laserttm -- laserttm-mcp
+```
+
+Because multi-pulse runs can take minutes, the server uses a job pattern: `start_run` launches a solver in a background worker process and returns a run id, `check_run` polls status with a log tail, and `get_results` returns the results summary once finished (full arrays land in `~/.laserttm/runs/<run_id>/results.npz`; override the root with `LASERTTM_RUNS_DIR`). `run_quick` wraps the pattern for short runs, and `cancel_run` terminates a job.
 
 ## Validation against the MATLAB reference
 
@@ -208,7 +254,7 @@ The MATLAB reference implementation has its own record (concept DOI [10.5281/zen
 
 ## Versioning and Releases
 
-The `VERSION` file at the repository root is the single source of truth: the package version is read from it at build time (`[tool.hatch.version]` in `pyproject.toml`) and exposed at runtime as `laserttm.__version__`. Every push to `main` is automatically published as a GitHub release — the [release workflow](.github/workflows/release.yml) bumps the patch number in `VERSION`, tags the commit, and publishes; Zenodo then archives the release under a new version DOI. To jump to a new minor or major version, edit `VERSION` yourself in your push and that exact version is released instead.
+The `VERSION` file at the repository root is the single source of truth: the package version is read from it at build time (`[tool.hatch.version]` in `pyproject.toml`) and exposed at runtime as `laserttm.__version__`. Every push to `main` is automatically published as a GitHub release — the [release workflow](.github/workflows/release.yml) bumps the patch number in `VERSION`, tags the commit, and publishes; Zenodo then archives the release under a new version DOI, and the same workflow builds the sdist and wheel and publishes them to [PyPI](https://pypi.org/p/laserttm) via [Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC — no API tokens stored). To jump to a new minor or major version, edit `VERSION` yourself in your push and that exact version is released instead.
 
 ## License
 

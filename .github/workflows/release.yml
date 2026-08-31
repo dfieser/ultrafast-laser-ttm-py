@@ -28,6 +28,8 @@ jobs:
     if: "!startsWith(github.event.head_commit.message, 'Release ')"
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,3 +70,41 @@ jobs:
           git tag "$v"
           git push origin "$v"
           gh release create "$v" --repo "$GITHUB_REPOSITORY" --title "$v" --generate-notes
+
+  # Publish the released version to PyPI via Trusted Publishing (OIDC):
+  # no API token is stored anywhere. PyPI must be configured once with a
+  # trusted publisher for this repository + workflow + the "pypi"
+  # environment (https://docs.pypi.org/trusted-publishers/).
+  publish-pypi:
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/laserttm
+    permissions:
+      id-token: write   # OIDC token for PyPI Trusted Publishing
+      contents: write   # attach the built distributions to the release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release.outputs.version }}   # the release tag
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+          ls -l dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Attach distributions to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ needs.release.outputs.version }}" dist/* \
+            --repo "$GITHUB_REPOSITORY" --clobber

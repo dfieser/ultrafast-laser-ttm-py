@@ -56,6 +56,16 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     if save_figures:
         make_plots = True
 
+    # storeHistory=False drops the per-pulse time histories (kept only for
+    # the timeline plots), bounding memory for very long runs: ~100k pulses
+    # would otherwise accumulate gigabytes of RK4/coast samples. All physics,
+    # per-pulse scalars, and radial profiles are unaffected.
+    store_history = bool(get_cfg_field(cfg, "storeHistory", True))
+    if not store_history and make_plots:
+        print("  storeHistory=False: time-history figures disabled.")
+        make_plots = False
+        save_figures = False
+
     print("=== Radial Surface TTM Pulsed Laser Calculator ===")
 
     # ========================  USER INPUTS  =================================
@@ -195,8 +205,9 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
                 n_pulses, trep, pulse_offset, prof_code, tau_fwhm, eabs_vol,
                 pulse_fine_win, relax_tol, relax_max_t, dt_floor_abs,
             )
-            cell_times.append(loc_t)
-            cell_tl.append(loc_tl)
+            if store_history:
+                cell_times.append(loc_t)
+                cell_tl.append(loc_tl)
 
             utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
             teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
@@ -227,8 +238,9 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
                 tz, c_t, c_tl = cn_coast_kt(
                     tz, coast_gap, n_diff_local, dz, t0, cl,
                     k_tab_t, k_tab_k, t_fine_end, sample_int)
-                cell_coast_t.append(c_t)
-                cell_coast_tl.append(c_tl)
+                if store_history:
+                    cell_coast_t.append(c_t)
+                    cell_coast_tl.append(c_tl)
                 tresidual = tz[0]
 
                 # Apply depth cooling to the radial surface array
@@ -244,7 +256,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
                 dt_rad = coast_gap / n_rad_steps
                 tr_surf = radial_coast_kt(
                     tr_surf, n_rad_steps, dt_rad, dr, t0, cl, k_tab_t, k_tab_k)
-            else:
+            elif store_history:
                 cell_coast_t.append(np.empty(0))
                 cell_coast_tl.append(np.empty(0))
 
@@ -324,8 +336,9 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
                     pulse_fine_win, relax_tol, relax_max_t, dt_floor_abs,
                 )
                 if ri == 0:
-                    cell_times.append(loc_t)
-                    cell_tl.append(loc_tl)
+                    if store_history:
+                        cell_times.append(loc_t)
+                        cell_tl.append(loc_tl)
                     t_fine_end_center = loc_t[-1]
 
                 utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
@@ -360,8 +373,9 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
                 c_t, c_tl = cn_depth_multi_kt(
                     tz_all, active, n_diff_local, dt_diff, dz, t0, cl,
                     k_tab_t, k_tab_k, t_fine_end_center, sample_int)
-                cell_coast_t.append(c_t)
-                cell_coast_tl.append(c_tl)
+                if store_history:
+                    cell_coast_t.append(c_t)
+                    cell_coast_tl.append(c_tl)
                 te_all[active] = tz_all[0, active]
                 tl_all[active] = tz_all[0, active]
 
@@ -384,7 +398,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
                         tz_all[0, ri] = tr_surf[ri]
                 te_all = tr_surf.copy()
                 tl_all = tr_surf.copy()
-            else:
+            elif store_history:
                 cell_coast_t.append(np.empty(0))
                 cell_coast_tl.append(np.empty(0))
 
@@ -442,10 +456,14 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
             "Use 'scale' or 'independent'.")
 
     # ==================  Stitch centre-point time history  ==================
-    all_times = np.concatenate([
-        arr for pair in zip(cell_times, cell_coast_t) for arr in pair])
-    all_tl_surf = np.concatenate([
-        arr for pair in zip(cell_tl, cell_coast_tl) for arr in pair])
+    if store_history:
+        all_times = np.concatenate([
+            arr for pair in zip(cell_times, cell_coast_t) for arr in pair])
+        all_tl_surf = np.concatenate([
+            arr for pair in zip(cell_tl, cell_coast_tl) for arr in pair])
+    else:
+        all_times = np.empty(0)
+        all_tl_surf = np.empty(0)
 
     # ==================  Print results  =====================================
     frep_v, frep_u = smart_freq(f_rep)
