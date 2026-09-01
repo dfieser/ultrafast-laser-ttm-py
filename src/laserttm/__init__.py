@@ -20,6 +20,18 @@ _SOLVER_EXPORTS = {
     "surface_point_solver": "surface_point",
 }
 
+# Discovery: what the solvers accept, what they return, and whether a config
+# is valid. Kept separate because schema.py is standard-library only, so
+# describing or validating a run never pays the numba import.
+_SCHEMA_EXPORTS = (
+    "describe_solver",
+    "estimate_run",
+    "json_schema",
+    "list_solvers",
+    "materials_table",
+    "validate_config",
+)
+
 # Single source of truth is the VERSION file at the repository root: the
 # build backend stamps it into the package metadata (see [tool.hatch.version]
 # in pyproject.toml), and the release workflow bumps it on every push.
@@ -38,22 +50,32 @@ except PackageNotFoundError:  # running from a source tree without install
 __all__ = [
     "__version__",
     "depth_profile_solver",
+    "describe_solver",
+    "estimate_run",
     "inversion_quantifier",
+    "json_schema",
+    "list_solvers",
+    "materials_table",
     "radial_profile_solver",
     "scanning_beam_solver",
     "single_pulse_visualizer",
     "surface_point_solver",
+    "validate_config",
 ]
 
 
 def __getattr__(name: str):
-    module_name = _SOLVER_EXPORTS.get(name)
-    if module_name is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    value = getattr(import_module(f".{module_name}", __name__), name)
+    if name in _SCHEMA_EXPORTS:
+        value = getattr(import_module(".schema", __name__), name)
+    else:
+        module_name = _SOLVER_EXPORTS.get(name)
+        if module_name is None:
+            raise AttributeError(
+                f"module {__name__!r} has no attribute {name!r}")
+        value = getattr(import_module(f".{module_name}", __name__), name)
     globals()[name] = value  # cache so the import runs once
     return value
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | set(_SOLVER_EXPORTS))
+    return sorted(set(globals()) | set(_SOLVER_EXPORTS) | set(_SCHEMA_EXPORTS))
