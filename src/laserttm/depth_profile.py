@@ -28,20 +28,12 @@ from .config import get_cfg_field
 from .kernels import (
     cn_coast_kt,
     k_hybrid,
-    k_table_for,
     profile_code,
     ttm_1d_rhs,
 )
+from .materials import k_model_name, k_table, resolve_material
 from .progress import ProgressReporter
 from .units import smart_energy, smart_freq, smart_length, smart_time
-
-# Material presets: gamma [J m^-3 K^-2], Cl [J m^-3 K^-1], G [W m^-3 K^-1],
-#                   ke0 [W m^-1 K^-1],   kl [W m^-1 K^-1], alpha_opt [m^-1]
-_PRESETS = {
-    "w":  (137.3, 2.54e6, 1.65e17, 150.0, 24.0, 5.88e7),
-    "cu": (98.0,  3.45e6, 0.90e17, 390.0, 11.0, 7.09e7),
-    "al": (136.0, 2.42e6, 2.40e17, 220.0, 17.0, 1.22e8),
-}
 
 _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 200e-12)
 
@@ -71,13 +63,6 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     # ========================  USER INPUTS  =================================
     material = get_cfg_field(cfg, "material", "W")
 
-    gamma_manual = get_cfg_field(cfg, "gamma_manual", 137.3)
-    cl_manual = get_cfg_field(cfg, "Cl_manual", 2.54e6)
-    g_manual = get_cfg_field(cfg, "G_manual", 1.65e17)
-    ke0_manual = get_cfg_field(cfg, "ke0_manual", 150.0)
-    kl_manual = get_cfg_field(cfg, "kl_manual", 24.0)
-    alpha_opt_manual = get_cfg_field(cfg, "alpha_opt_manual", 5.88e7)
-
     pavg = get_cfg_field(cfg, "Pavg", 40.0)
     spot_radius = get_cfg_field(cfg, "spotRadius", 100e-6)
     f_rep = get_cfg_field(cfg, "f_rep", 18e6)
@@ -106,18 +91,13 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
 
     show_progress = get_cfg_field(cfg, "showProgress", None)
 
-    # ==================  Material presets  ==================================
-    key = str(material).lower()
-    if key in _PRESETS:
-        gamma, cl, g_ep, ke0, kl, alpha_opt = _PRESETS[key]
-    elif key == "custom":
-        gamma, cl, g_ep = gamma_manual, cl_manual, g_manual
-        ke0, kl, alpha_opt = ke0_manual, kl_manual, alpha_opt_manual
-    else:
-        raise ValueError(f'Unknown material "{material}". Use W, Cu, Al, or custom.')
+    # ==================  Material properties  ===============================
+    mat = resolve_material(cfg, needs_optical=True)
+    gamma, cl, g_ep = mat.gamma, mat.cl, mat.g_ep
+    ke0, kl, alpha_opt = mat.ke0, mat.kl, mat.alpha_opt
 
     # Hybrid k(T): tungsten table, constant ke0+kl otherwise
-    k_tab_t, k_tab_k = k_table_for(key, ke0, kl)
+    k_tab_t, k_tab_k = k_table(mat)
 
     # ==================  Derived quantities  ================================
     t0 = t0_c + 273.15
@@ -154,6 +134,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     print(f"  Skin depth (1/alpha_opt): {delta_opt * 1e9:.1f} nm  "
           f"({delta_opt / dz:.1f} grid cells)")
     print(f"  ke0 = {ke0:.0f} W/mK,  kl = {kl:.0f} W/mK,  k_hybrid(T0) = {k_eff:.1f} W/mK")
+    print(f"  Conductivity model: {k_model_name(mat)}")
     print(f"  Fluence:   {f_peak / 1e4:.4g} J/cm^2,  Absorbed: {eabs_areal / 1e4:.4g} J/cm^2")
     print(f"  tau_e-ph (at T0): {tau_eph * 1e12:.4g} ps")
     print(f"  Diffusion: k(T0)={k_eff:.1f} W/mK, alpha={alpha_diff:.3e} m^2/s, "

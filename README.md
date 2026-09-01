@@ -116,6 +116,19 @@ results = surface_point_solver(cfg)
 
 Every run writes its text output under `outputs/` and returns a `results` dict you can inspect or post-process. The first solver call in a fresh environment takes a little longer while Numba compiles the kernels. They are cached on disk after that.
 
+### Material properties
+
+Presets for W, Cu, Au, and Al live in [materials.py](src/laserttm/materials.py). Any single property can be changed without leaving the preset, so studying one parameter no longer means restating the whole material:
+
+```python
+cfg = {
+    "material": "W",
+    "delta_opt": 23e-9,   # optical penetration depth [m], or alpha_opt in 1/m
+}
+```
+
+Overridable fields are `gamma`, `Cl`, `G`, `kl`, `ke0`, `alpha_opt` or `delta_opt`, and `T_melt_C`. The `ke0` and optical fields apply to the depth-resolved solvers, which are the ones that model absorption along depth. Setting a conductivity replaces tungsten's measured k(T) curve with a constant value, and `kTable` set to `measured` or `constant` overrides that choice. Use `material` set to `custom` with the `*_manual` fields to define a metal from scratch.
+
 **Suggested progression:**
 
 1. `examples/run_surface_point.py` for the simplest pulse-accumulation case

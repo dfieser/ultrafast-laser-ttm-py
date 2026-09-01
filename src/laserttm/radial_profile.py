@@ -22,8 +22,6 @@ import numpy as np
 
 from .config import get_cfg_field
 from .kernels import (
-    KHYBRID_W_K,
-    KHYBRID_W_T,
     cn_coast_kt,
     cn_depth_multi_kt,
     k_hybrid,
@@ -31,16 +29,9 @@ from .kernels import (
     radial_coast_kt,
     rk4_pulse_phase,
 )
+from .materials import k_model_name, k_table, resolve_material
 from .progress import ProgressReporter
 from .units import smart_energy, smart_freq, smart_length, smart_time
-
-# Material presets: gamma [J m^-3 K^-2], Cl [J m^-3 K^-1],
-#                   G [W m^-3 K^-1],     kl [W m^-1 K^-1]
-_PRESETS = {
-    "w":  (137.3, 2.54e6, 1.65e17, 174.0),
-    "cu": (98.0,  3.45e6, 0.90e17, 401.0),
-    "al": (136.0, 2.42e6, 2.40e17, 237.0),
-}
 
 
 def _matlab_round(x: float) -> int:
@@ -98,11 +89,8 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
 
     # ========================  USER INPUTS  =================================
     material = get_cfg_field(cfg, "material", "W")
-
-    gamma_manual = get_cfg_field(cfg, "gamma_manual", 137.3)
-    cl_manual = get_cfg_field(cfg, "Cl_manual", 2.54e6)
-    g_manual = get_cfg_field(cfg, "G_manual", 1.65e17)
-    kl_manual = get_cfg_field(cfg, "kl_manual", 174.0)
+    mat = resolve_material(cfg, needs_optical=False)
+    gamma, cl, g_ep, kl = mat.gamma, mat.cl, mat.g_ep, mat.k_total
 
     pavg = get_cfg_field(cfg, "Pavg", 40.0)
     spot_radius = get_cfg_field(cfg, "spotRadius", 100e-6)
@@ -126,7 +114,8 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     sim_duration = get_cfg_field(cfg, "simDuration", 1e-3)
 
     early_stop_melt_radius_um = get_cfg_field(cfg, "earlyStopMeltRadius_um", 0)
-    early_stop_t_melt_c = get_cfg_field(cfg, "earlyStopT_melt_C", 3422)
+    # Defaults to this material's melting point, not tungsten's.
+    early_stop_t_melt_c = get_cfg_field(cfg, "earlyStopT_melt_C", mat.t_melt_c)
     early_stop_check_interval = int(get_cfg_field(cfg, "earlyStopCheckInterval", 100))
     early_stop_enabled = early_stop_melt_radius_um > 0
 
@@ -135,22 +124,9 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     n_diff_min = int(get_cfg_field(cfg, "Ndiff", 100))
     show_progress = get_cfg_field(cfg, "showProgress", None)
 
-    # ==================  Material presets  ==================================
-    key = str(material).lower()
-    if key in _PRESETS:
-        gamma, cl, g_ep, kl = _PRESETS[key]
-    elif key == "custom":
-        gamma, cl, g_ep, kl = gamma_manual, cl_manual, g_manual, kl_manual
-    else:
-        raise ValueError(f'Unknown material "{material}". Use W, Cu, Al, or custom.')
-
     # Hybrid k(T): tungsten table, constant kl otherwise (this solver has no
     # separate electron conductivity, unlike the depth solver's ke0+kl table)
-    if key == "w":
-        k_tab_t, k_tab_k = KHYBRID_W_T.copy(), KHYBRID_W_K.copy()
-    else:
-        k_tab_t = np.array([1.0, 1e12])
-        k_tab_k = np.array([kl, kl])
+    k_tab_t, k_tab_k = k_table(mat)
 
     # ==================  Derived quantities  ================================
     t0 = t0_c + 273.15
@@ -181,6 +157,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     n_diff_rad = max(10, int(np.ceil(alpha_l * trep / (f_target * dr**2))))
 
     print(f"  Material:       {str(material).upper()}")
+    print(f"  Conductivity:   {k_model_name(mat)}")
     print(f"  Mode:           {radial_solve_mode}")
     print(f"  Radial points:  {nr}  (0 to {r_max * 1e6:.0f} um)")
     print(f"  Pulses:         {n_pulses}  (simDuration={sim_duration:.4g} s)")

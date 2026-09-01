@@ -21,7 +21,9 @@ from datetime import datetime
 import numpy as np
 from scipy.io import savemat
 
+from .config import get_cfg_field
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
+from .materials import resolve_material
 from .progress import ProgressReporter
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
@@ -51,13 +53,6 @@ _DEFAULTS = {
     "NadiPerGap": 10,
 }
 
-_PRESETS = {
-    "w":  (137.3, 2.54e6, 1.65e17, 174.0),
-    "cu": (98.0,  3.45e6, 0.90e17, 401.0),
-    "al": (136.0, 2.42e6, 2.40e17, 237.0),
-}
-
-
 def _matlab_round(x: float) -> int:
     return int(np.floor(x + 0.5))
 
@@ -68,22 +63,25 @@ def scanning_beam_solver(params: dict | None = None,
     """Run the 2D scanning-beam TTM solver. Returns the v1 results dict."""
     if params is None:
         params = {}
-    if output_dir is None:
-        output_dir = os.path.join(os.getcwd(), "outputs")
+    # Keep the caller's own keys: the merged defaults below would otherwise
+    # look like explicit per-field material overrides.
+    user_params = dict(params)
 
     # Merge defaults with user params (MATLAB echoes the merged struct)
-    params = {**_DEFAULTS, **dict(params)}
+    params = {**_DEFAULTS, **user_params}
 
-    key = str(params["material"]).lower()
-    if key in _PRESETS:
-        gamma, cl, g_ep, kl = _PRESETS[key]
-    elif key == "custom":
-        gamma = params["gamma"]
-        cl = params["Cl"]
-        g_ep = params["G"]
-        kl = params["kl"]
-    else:
-        raise ValueError(f'Unknown material "{params["material"]}".')
+    # The dict is authoritative when the positional arguments are unset, so
+    # that outputDir/makePlots/saveFigures work here as in every other solver
+    # (the CLI and the MCP server dispatch all solvers as solver(cfg)).
+    if output_dir is None:
+        output_dir = get_cfg_field(params, "outputDir",
+                                   os.path.join(os.getcwd(), "outputs"))
+    if save_plots:
+        save_plots = bool(get_cfg_field(params, "makePlots", True)) or \
+            bool(get_cfg_field(params, "saveFigures", False))
+
+    mat = resolve_material(params, needs_optical=False, overrides=user_params)
+    gamma, cl, g_ep, kl = mat.gamma, mat.cl, mat.g_ep, mat.k_total
 
     pavg = params["Pavg"]
     spot_radius = params["spotRadius"]

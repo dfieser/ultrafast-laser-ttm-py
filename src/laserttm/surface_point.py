@@ -20,18 +20,9 @@ import numpy as np
 
 from .config import get_cfg_field
 from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
+from .materials import resolve_material
 from .progress import ProgressReporter
 from .units import smart_energy, smart_freq, smart_length, smart_time
-
-# Material presets: gamma [J m^-3 K^-2], Cl [J m^-3 K^-1],
-#                   G [W m^-3 K^-1],     kl [W m^-1 K^-1]
-_PRESETS = {
-    "w":  (137.3, 2.54e6, 1.65e17, 174.0),
-    "cu": (98.0,  3.45e6, 0.90e17, 401.0),
-    "au": (67.0,  2.49e6, 1.40e16, 317.0),
-    "al": (136.0, 2.42e6, 2.40e17, 237.0),
-}
-
 
 _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
@@ -56,12 +47,6 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     # ========================  USER INPUTS  =================================
     material = get_cfg_field(cfg, "material", "W")
 
-    # Manual material values (used only when material = 'custom')
-    gamma_manual = get_cfg_field(cfg, "gamma_manual", 94.0)
-    cl_manual = get_cfg_field(cfg, "Cl_manual", 2.54e6)
-    g_manual = get_cfg_field(cfg, "G_manual", 1.65e17)
-    kl_manual = get_cfg_field(cfg, "kl_manual", 174.0)
-
     pavg = get_cfg_field(cfg, "Pavg", 1.0)                 # Average power [W]
     spot_radius = get_cfg_field(cfg, "spotRadius", 80e-6)  # Spot radius [m]
 
@@ -79,14 +64,9 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     n_diff = int(get_cfg_field(cfg, "Ndiff", 100))         # CN steps per inter-pulse period
     show_progress = get_cfg_field(cfg, "showProgress", None)  # waitbar popup
 
-    # ==================  Material Presets  ==================================
-    key = str(material).lower()
-    if key in _PRESETS:
-        gamma, cl, g_ep, kl = _PRESETS[key]
-    elif key == "custom":
-        gamma, cl, g_ep, kl = gamma_manual, cl_manual, g_manual, kl_manual
-    else:
-        raise ValueError(f'Unknown material "{material}". Use W, Cu, Au, Al, or custom.')
+    # ==================  Material properties  ===============================
+    mat = resolve_material(cfg, needs_optical=False)
+    gamma, cl, g_ep, kl = mat.gamma, mat.cl, mat.g_ep, mat.k_total
 
     # ==================  Incident Fluence  ==================================
     ep_calc = pavg / f_rep                                  # Pulse energy [J]
