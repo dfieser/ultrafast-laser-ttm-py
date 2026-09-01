@@ -49,6 +49,44 @@ def _matlab_round(x: float) -> int:
     return int(np.floor(x + 0.5))
 
 
+def _derive_radial_view(profile_snaps_tz, t0, spot_radius, nr_radial,
+                        r_max_factor, alpha_diff, sim_duration):
+    """Scale the depth solution radially under the Gaussian fluence profile.
+
+    The 1D solve is a beam-centre column. Away from centre the deposited
+    energy falls off as the Gaussian fluence, so the temperature rise scales
+    with it. No extra integration is needed, but the approximation assumes
+    lateral diffusion stays small compared with the spot, which is checked
+    here rather than in the figures.
+    """
+    r_grid = np.linspace(0.0, r_max_factor * spot_radius, nr_radial)
+    fluence_ratio = np.exp(-2.0 * r_grid**2 / spot_radius**2)
+
+    l_lat = float(np.sqrt(alpha_diff * sim_duration))
+    print(f"  Lateral diffusion length: {l_lat * 1e6:.2f} um  "
+          f"(spot radius: {spot_radius * 1e6:.0f} um)")
+    if l_lat > 0.1 * spot_radius:
+        warnings.warn(
+            f"Lateral diffusion ({l_lat * 1e6:.1f} um) is >10% of spot "
+            f"radius ({spot_radius * 1e6:.0f} um). Radial scaling "
+            "approximation degrades.", stacklevel=2)
+
+    # Surface temperature versus radius at each snapshot pulse.
+    surface_c = np.array([
+        t0 + (tz[0] - t0) * fluence_ratio - 273.15 for tz in profile_snaps_tz])
+    # Depth by radius map at the last snapshot.
+    cross_section_c = t0 + np.outer(
+        fluence_ratio, profile_snaps_tz[-1] - t0) - 273.15
+
+    return {
+        "radialGrid_um": r_grid * 1e6,
+        "radialFluenceRatio": fluence_ratio,
+        "radialSurfaceProfiles_C": surface_c,
+        "crossSection_C": cross_section_c,
+        "lateralDiffusionLength_m": l_lat,
+    }
+
+
 def depth_profile_solver(cfg: dict | None = None) -> dict:
     """Run the 1D depth-resolved TTM solver. Returns the v1 results dict."""
     if cfg is None:
@@ -566,10 +604,21 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
             f"{all_tl_surf[i] - 273.15:16.6f}\n" for i in range(all_times.size))
     print(f"  Output written to: {out_path}\n")
 
+    # The radial view is part of the solution, not a figure. Computing it
+    # here means the CLI and the MCP server get it, and the accuracy warning
+    # it raises, even though both default to no figures.
+    radial_view = None
+    if enable_radial and profile_snaps_tz:
+        print("\n=== Radial Surface Temperature Profiles (Multi-Pulse) ===")
+        radial_view = _derive_radial_view(
+            profile_snaps_tz, t0, spot_radius, nr_radial, r_max_factor,
+            alpha_diff, sim_duration)
+
     if make_plots:
         from .plotting import plot_depth_profile
 
         plot_depth_profile(
+            radial_view=radial_view,
             all_times=all_times, all_tl_surf=all_tl_surf,
             teq_vals=teq_vals, tresid_vals=tresid_vals,
             snap_te=snap_te, snap_tl=snap_tl, snap_labels=snap_labels,
@@ -577,9 +626,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
             profile_snaps_tz=profile_snaps_tz,
             profile_snaps_label=profile_snaps_label,
             z_grid_diff=z_grid_diff, ldiff=ldiff, t0=t0,
-            enable_radial=enable_radial, nr_radial=nr_radial,
-            r_max_factor=r_max_factor, spot_radius=spot_radius,
-            alpha_diff=alpha_diff, sim_duration=sim_duration,
+            spot_radius=spot_radius,
             material=material, gamma=gamma, cl=cl, g_ep=g_ep,
             ke0=ke0, kl=kl, alpha_opt=alpha_opt, delta_opt=delta_opt,
             pavg=pavg, frep_v=frep_v, frep_u=frep_u, ep_v=ep_v, ep_u=ep_u,
@@ -639,4 +686,6 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         "alpha_opt": alpha_opt,
         "Trep": trep,
         "simDuration": sim_duration,
+        # Radial view derived from the depth solution, when enabled.
+        **(radial_view or {}),
     }

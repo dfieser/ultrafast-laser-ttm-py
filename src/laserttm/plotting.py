@@ -146,8 +146,7 @@ def plot_single_pulse(*, all_times, all_te_surf, all_tl_surf, first_pulse_center
 def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
                        snap_te, snap_tl, snap_labels, z_grid, lz,
                        profile_snaps_tz, profile_snaps_label, z_grid_diff,
-                       ldiff, t0, enable_radial, nr_radial, r_max_factor,
-                       spot_radius, alpha_diff, sim_duration,
+                       ldiff, t0, spot_radius, radial_view,
                        material, gamma, cl, g_ep, ke0, kl, alpha_opt, delta_opt,
                        pavg, frep_v, frep_u, ep_v, ep_u, tau_v, tau_u,
                        spot_v, spot_u, f_peak, absorbance,
@@ -298,24 +297,11 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
         _save_fig(fig4, save_dir, "Depth_Profiles_Heat_Accumulation_MultiPulse",
                   case_tag)
 
-    # --- Plots 5-8: radial profiles derived from the depth data -------------
-    if enable_radial and n_p_snaps:
-        print("\n=== Computing Radial Surface Temperature Profiles (Multi-Pulse) ===")
-        r_max_rad = r_max_factor * spot_radius
-        r_grid_rad = np.linspace(0.0, r_max_rad, nr_radial)
-        r_rad_plot = r_grid_rad * 1e6
-        fluence_ratio_rad = np.exp(-2.0 * r_grid_rad**2 / spot_radius**2)
-
-        l_lat = np.sqrt(alpha_diff * sim_duration)
-        print(f"  Lateral diffusion length: {l_lat * 1e6:.2f} um  "
-              f"(spot radius: {spot_radius * 1e6:.0f} um)")
-        if l_lat > 0.1 * spot_radius:
-            import warnings
-
-            warnings.warn(
-                f"Lateral diffusion ({l_lat * 1e6:.1f} um) is >10% of spot "
-                f"radius ({spot_radius * 1e6:.0f} um). Radial scaling "
-                "approximation degrades.")
+    # --- Plots 5-8: the radial view, computed by the solver -----------------
+    if radial_view and n_p_snaps:
+        r_rad_plot = radial_view["radialGrid_um"]
+        fluence_ratio_rad = radial_view["radialFluenceRatio"]
+        surface_profiles_c = radial_view["radialSurfaceProfiles_C"]
 
         # Plot 5: radial surface temperature buildup
         fig5 = plt.figure("Radial_Surface_Temperature_Buildup_MultiPulse",
@@ -323,9 +309,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
         ax5 = fig5.add_subplot(111)
         colors_rad = plt.get_cmap("viridis")(np.linspace(0, 1, n_p_snaps))
         for si in range(n_p_snaps):
-            d_t_center = profile_snaps_tz[si][0] - t0
-            tsurf_r = t0 + d_t_center * fluence_ratio_rad
-            ax5.plot(r_rad_plot, tsurf_r - 273.15, "-",
+            ax5.plot(r_rad_plot, surface_profiles_c[si], "-",
                      color=colors_rad[si], lw=1.6,
                      label=profile_snaps_label[si])
         ax5.axvline(spot_radius * 1e6, color="k", ls="--", lw=1.2)
@@ -340,9 +324,8 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
                   case_tag)
 
         # Plot 6: final depth x radius cross-section heatmap
-        tz_final = profile_snaps_tz[-1]
-        d_tz_final = tz_final - t0
-        t_rz_final = t0 + np.outer(fluence_ratio_rad, d_tz_final)
+        d_tz_final = profile_snaps_tz[-1] - t0
+        t_rz_final_c = radial_view["crossSection_C"]
         z_max_cs = ldiff * 1e6
         heated = np.flatnonzero(d_tz_final > 0.5)
         if heated.size:
@@ -354,7 +337,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
                           figsize=(9, 5), facecolor="w")
         ax6 = fig6.add_subplot(111)
         z_diff_um = z_grid_diff * 1e6
-        pm = ax6.pcolormesh(r_rad_plot, z_diff_um, t_rz_final.T - 273.15,
+        pm = ax6.pcolormesh(r_rad_plot, z_diff_um, t_rz_final_c.T,
                             cmap="hot", shading="gouraud")
         cb = fig6.colorbar(pm, ax=ax6)
         cb.set_label("Temperature (°C)", fontsize=11)
