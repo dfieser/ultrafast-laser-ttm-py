@@ -35,19 +35,147 @@ import json
 import sys
 
 
-def _cmd_list(_args: argparse.Namespace) -> int:
-    from .runtools import SOLVER_DESCRIPTIONS
+def _cmd_list(args: argparse.Namespace) -> int:
+    from . import schema
 
-    width = max(len(s) for s in SOLVER_DESCRIPTIONS)
-    for sid, desc in SOLVER_DESCRIPTIONS.items():
-        print(f"  {sid:<{width}}  {desc}")
+    if getattr(args, "json", False):
+        print(json.dumps(schema.list_solvers(), indent=2))
+        return 0
+    for row in schema.list_solvers():
+        print(f"\n{row['id']}  ({row['nParams']} config keys)")
+        print(f"  {row['summary']}")
+        print(f"  Use when:     {row['whenToUse']}")
+        print(f"  Not when:     {row['whenNotToUse']}")
+    print("\nRun 'laserttm describe <solver>' for every key, unit and default.")
     return 0
 
 
+def _cmd_describe(args: argparse.Namespace) -> int:
+    from . import schema
+
+    try:
+        described = schema.describe_solver(args.solver, args.section)
+    except KeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 4
+
+    if args.json:
+        print(json.dumps(described, indent=2, default=str))
+        return 0
+
+    print(f"{described['id']} — {described['title']}")
+    print(f"\n{described['summary']}")
+    print(f"\nUse when:  {described['whenToUse']}")
+    print(f"Not when:  {described['whenNotToUse']}")
+
+    params = described.get("params")
+    if params:
+        print(f"\nConfig keys ({len(params)}):")
+        for name in sorted(params):
+            spec = params[name]
+            unit = f" [{spec['unit']}]" if spec.get("unit") else ""
+            print(f"\n  {name}{unit}  default={spec['default']!r}")
+            print(f"      {spec['summary']}")
+            if spec.get("choices"):
+                print(f"      choices: {', '.join(spec['choices'])}")
+            if spec.get("range"):
+                low, high = spec["range"]
+                print(f"      valid range: {low:g} to {high:g}")
+            if spec.get("notes"):
+                print(f"      note: {spec['notes']}")
+
+    if described.get("files"):
+        print("\nWrites: " + ", ".join(described["files"]))
+    for label, example in (described.get("examples") or {}).items():
+        print(f"\nExample ({label}): {json.dumps(example)}")
+    return 0
+
+
+def _cmd_schema(args: argparse.Namespace) -> int:
+    from . import schema
+
+    try:
+        print(json.dumps(schema.json_schema(args.solver), indent=2))
+    except KeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 4
+    return 0
+
+
+def _cmd_materials(args: argparse.Namespace) -> int:
+    from . import schema
+
+    rows = schema.materials_table()
+    if args.json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    for row in rows:
+        print(f"\n{row['key']}   melting point {row['T_melt_C']:g} degC")
+        print(f"  gamma {row['gamma']:g} J m^-3 K^-2,  Cl {row['Cl']:.3g} "
+              f"J m^-3 K^-1,  G {row['G']:.3g} W m^-3 K^-1")
+        print(f"  conductivity {row['kTotal']:g} W m^-1 K^-1"
+              + (f" (ke0 {row['ke0']:g} + kl {row['kl']:g})"
+                 if row["ke0"] is not None else ""))
+        if row["delta_opt"] is not None:
+            print(f"  optical penetration depth {row['delta_opt'] * 1e9:.1f} nm")
+        print(f"  solvers: {', '.join(row['solvers'])}")
+    return 0
+
+
+def _print_problems(report: dict) -> None:
+    """Render a validate_config report the way a person reads it."""
+    for kind, items in (("error", report["errors"]),
+                        ("warning", report["warnings"])):
+        for problem in items:
+            print(f"  [{kind}] {problem['message']}", file=sys.stderr)
+            print(f"          {problem['suggestion']}", file=sys.stderr)
+
+
+def _cmd_validate(args: argparse.Namespace) -> int:
+    from . import schema
+
+    # utf-8-sig transparently strips a byte-order mark, which PowerShell
+    # writes by default when a config is redirected to a file.
+    with open(args.config, encoding="utf-8-sig") as f:
+        cfg = json.load(f)
+    if not isinstance(cfg, dict):
+        print("error: config file must contain a JSON object", file=sys.stderr)
+        return 2
+    solver_id = args.solver or cfg.pop("solver", None)
+    cfg.pop("solver", None)
+    if solver_id is None:
+        print("error: no solver given (use --solver or a 'solver' key in "
+              "the config)", file=sys.stderr)
+        return 2
+
+    try:
+        report = schema.validate_config(solver_id, cfg)
+    except KeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 4
+
+    if args.json:
+        print(json.dumps(report, indent=2, default=str))
+        return 0 if report["ok"] else 2
+
+    if report["ok"]:
+        est = report["estimate"]
+        print(f"Config is valid for {report['solver']}.")
+        print(f"  {est['nPulses']} pulses, roughly {est['estRuntime_s']:g} s.")
+    else:
+        print(f"{len(report['errors'])} problem(s) with the config for "
+              f"'{report['solver']}':", file=sys.stderr)
+    _print_problems(report)
+    return 0 if report["ok"] else 2
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
+    from . import schema
     from .runtools import get_solver, save_results_npz, summarize_results
 
-    with open(args.config) as f:
+    # utf-8-sig transparently strips a byte-order mark, which PowerShell
+    # writes by default when a config is redirected to a file.
+    with open(args.config, encoding="utf-8-sig") as f:
         cfg = json.load(f)
     if not isinstance(cfg, dict):
         print("error: config file must contain a JSON object", file=sys.stderr)
@@ -59,6 +187,28 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print("error: no solver given (use --solver or a 'solver' key in "
               "the config)", file=sys.stderr)
         return 2
+
+    # Check the config before spending minutes on it. A typo would otherwise
+    # be ignored and the run would silently proceed on defaults.
+    try:
+        report = schema.validate_config(solver_id, cfg)
+    except KeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 4
+    if not report["ok"]:
+        print(f"{len(report['errors'])} problem(s) with the config for "
+              f"'{report['solver']}':", file=sys.stderr)
+        _print_problems(report)
+        return 2
+    for problem in report["warnings"]:
+        print(f"  [warning] {problem['message']}", file=sys.stderr)
+
+    if args.dry_run:
+        est = report["estimate"]
+        print(f"Config is valid for {report['solver']}. "
+              f"{est['nPulses']} pulses, roughly {est['estRuntime_s']:g} s. "
+              "Nothing was run.")
+        return 0
 
     # Batch-friendly default: no figure windows unless asked for.
     if args.plots:
@@ -96,12 +246,43 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_list = sub.add_parser("list", help="list available solvers")
+    p_list.add_argument("--json", action="store_true", help="emit JSON")
     p_list.set_defaults(func=_cmd_list)
+
+    p_desc = sub.add_parser(
+        "describe",
+        help="show a solver's config keys, units, defaults and ranges")
+    p_desc.add_argument("solver", help="solver id (see 'laserttm list')")
+    p_desc.add_argument("--section", default="all",
+                        choices=["all", "inputs", "files", "examples"],
+                        help="limit the output to one section")
+    p_desc.add_argument("--json", action="store_true", help="emit JSON")
+    p_desc.set_defaults(func=_cmd_describe)
+
+    p_schema = sub.add_parser(
+        "schema", help="emit a JSON Schema for a solver's config")
+    p_schema.add_argument("solver", help="solver id")
+    p_schema.set_defaults(func=_cmd_schema)
+
+    p_mat = sub.add_parser("materials",
+                           help="list material presets and their properties")
+    p_mat.add_argument("--json", action="store_true", help="emit JSON")
+    p_mat.set_defaults(func=_cmd_materials)
+
+    p_val = sub.add_parser(
+        "validate", help="check a config without running anything")
+    p_val.add_argument("config", help="path to the JSON config file")
+    p_val.add_argument("--solver", help="solver id (overrides the config's "
+                                        "'solver' key)")
+    p_val.add_argument("--json", action="store_true", help="emit JSON")
+    p_val.set_defaults(func=_cmd_validate)
 
     p_run = sub.add_parser("run", help="run a solver from a JSON config file")
     p_run.add_argument("config", help="path to the JSON config file")
     p_run.add_argument("--solver", help="solver id (overrides the config's "
                                         "'solver' key)")
+    p_run.add_argument("--dry-run", action="store_true",
+                       help="validate and estimate the run, then stop")
     p_run.add_argument("--out", help="write results to this path "
                                      "(.json summary or .npz arrays)")
     p_run.add_argument("--max-array", type=int, default=10000,

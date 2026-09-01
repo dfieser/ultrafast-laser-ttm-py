@@ -136,7 +136,20 @@ Overridable fields are `gamma`, `Cl`, `G`, `kl`, `ke0`, `alpha_opt` or `delta_op
 3. `examples/run_radial_profile.py` for radial spread under a Gaussian spot
 4. `examples/run_scanning_beam.py` for a moving-beam process
 
-The MATLAB repo's [project wiki](https://github.com/dfieser/ultrafast-laser-ttm-toolbox/wiki) covers the model physics and every config field. The fields carry over one-to-one.
+### Finding the config fields
+
+Every solver can describe itself, so nothing needs to be looked up in source:
+
+```python
+from laserttm import describe_solver, validate_config
+
+describe_solver("depth_profile")     # every key with unit, default and range
+validate_config("depth_profile", cfg)  # check a config in milliseconds
+```
+
+`validate_config` reports every problem at once and names the fix. A key with the wrong case, a key belonging to a different solver, and a value that looks like microns rather than metres are all caught before a run starts rather than being silently ignored.
+
+The MATLAB repo's [project wiki](https://github.com/dfieser/ultrafast-laser-ttm-toolbox/wiki) covers the model physics. The config fields carry over one-to-one.
 
 ## Solvers
 
@@ -160,10 +173,17 @@ All six return a results dict with the shared v1 contract fields: `solver`, `sol
 The package installs a `laserttm` console script for batch and scripted use:
 
 ```bash
-laserttm list                              # available solver ids
-laserttm run study.json --out results.json # run a config (.npz also supported)
+laserttm list                              # solvers, with guidance on which to use
+laserttm describe radial_profile           # every config key, unit, default and range
+laserttm materials                         # material presets and their properties
+laserttm validate study.json               # check a config without running it
+laserttm run study.json --dry-run          # validate and report the cost
+laserttm run study.json --out results.json # run a config, .npz also supported
+laserttm schema radial_profile             # JSON Schema for typed consumers
 laserttm version
 ```
+
+Configs are validated before a run starts, so a mistyped key stops with a message naming the correction instead of quietly running on defaults.
 
 A config file is the solver's cfg dict plus a `solver` key, with the same field names as the Python and MATLAB interfaces:
 
@@ -190,6 +210,8 @@ claude mcp add laserttm -- laserttm-mcp
 ```
 
 Because multi-pulse runs can take minutes, the server uses a job pattern. `start_run` launches a solver in a background worker process and returns a run id, `check_run` polls status with a log tail, and `get_results` returns the results summary once the run finishes. Full arrays land in `~/.laserttm/runs/<run_id>/results.npz`, and the `LASERTTM_RUNS_DIR` environment variable overrides that location. `run_quick` wraps the pattern for short runs, and `cancel_run` terminates a job.
+
+Three tools exist so a caller gets the config right the first time. `list_solvers` says which solver answers which question, `describe_solver` returns every accepted key with its unit, default and valid range, and `validate_config` checks a config in milliseconds and names the fix for anything wrong. `start_run` validates before spawning and reports the pulse count and estimated runtime, and `run_quick` refuses a run that cannot fit its timeout instead of returning a partial answer.
 
 ## Validation against the MATLAB reference
 

@@ -92,10 +92,23 @@ _RUNS: dict[str, dict[str, Any]] = {}
 
 mcp = MCPServer(
     "laserttm",
-    instructions="Two-temperature model (TTM) solvers for ultrafast "
-                 "pulsed-laser heating of metals. Multi-pulse runs can take "
-                 "minutes: prefer start_run + check_run + get_results; use "
-                 "run_quick only for small pulse counts.",
+    instructions=(
+        "Two-temperature model (TTM) solvers for ultrafast pulsed-laser "
+        "heating of metals.\n\n"
+        "All inputs are SI: metres, seconds, hertz, watts. A 100 micron spot "
+        "is spotRadius=100e-6, not 100. Keys are case-sensitive and unknown "
+        "keys are rejected rather than ignored.\n\n"
+        "Protocol: describe_solver to learn a solver's keys, then "
+        "validate_config to check a config in milliseconds, then start_run "
+        "plus check_run plus get_results. Use run_quick only when "
+        "validate_config estimates a short run.\n\n"
+        "Choosing a solver: pulse accumulation at one point -> "
+        "surface_point; temperature versus depth and the electron lattice "
+        "inversion -> depth_profile; melt radius or heat-affected footprint "
+        "-> radial_profile; one pulse with depth snapshots -> single_pulse; "
+        "inversion statistics across a pulse train -> "
+        "inversion_quantifier; a moving beam -> scanning_beam."
+    ),
 )
 
 
@@ -125,6 +138,20 @@ def _status(run_id: str) -> dict[str, Any]:
     }
 
 
+def _render_problems(solver: str, problems: list[dict[str, Any]]) -> str:
+    """One message carrying every problem and its fix.
+
+    An error revealing one of three mistakes would cost three round trips.
+    """
+    head = (f"{len(problems)} problem(s) with the config for '{solver}'. "
+            f"Call describe_solver('{solver}') for every accepted key with "
+            "its unit, default and valid range.")
+    body = "\n".join(
+        f"\n  {i}. {p['message']}\n     {p['suggestion']}"
+        for i, p in enumerate(problems, 1))
+    return head + "\n" + body
+
+
 def _log_tail(run_dir: str, lines: int) -> str:
     log_path = os.path.join(run_dir, _LOG_NAME)
     if not os.path.exists(log_path):
@@ -134,26 +161,95 @@ def _log_tail(run_dir: str, lines: int) -> str:
 
 
 @mcp.tool()
-def list_solvers() -> dict[str, str]:
-    """List the available solver ids and what each one computes."""
-    from .runtools import SOLVER_DESCRIPTIONS
+def list_solvers() -> dict[str, dict[str, Any]]:
+    """List the solvers with guidance on which one answers which question.
 
-    return dict(SOLVER_DESCRIPTIONS)
+    Keyed by solver id. Each entry says what the solver computes, when to
+    use it, when not to, how many config keys it accepts, and a minimal
+    working config. Call describe_solver for the full key list with units,
+    defaults and valid ranges.
+    """
+    from . import schema
+
+    return {row["id"]: {k: v for k, v in row.items() if k != "id"}
+            for row in schema.list_solvers()}
 
 
 @mcp.tool()
-def start_run(solver: str, config: dict[str, Any] | None = None) -> dict[str, Any]:
+def describe_solver(solver: str, section: str = "all") -> dict[str, Any]:
+    """Everything a caller needs to drive one solver correctly.
+
+    Returns every accepted config key with its type, unit, default, valid
+    range and meaning, plus the files the solver writes and runnable example
+    configs. Call this before composing a config for a solver you have not
+    used yet, rather than guessing key names or reading source.
+
+    section limits the reply to 'inputs', 'files' or 'examples'.
+    """
+    from . import schema
+
+    return schema.describe_solver(solver, section)
+
+
+@mcp.tool()
+def validate_config(solver: str,
+                    config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Check a config without running anything. Takes milliseconds.
+
+    Returns ok, a list of errors and warnings each with a machine-readable
+    code and a suggested fix, the resolved config with defaults merged, and
+    an estimate of pulse count and runtime.
+
+    Catches the failures that otherwise cost a full run: a misspelled or
+    wrong-case key, a key that belongs to a different solver, a unit slip
+    such as spotRadius=100 meaning microns, and a config far more expensive
+    than intended. Always call this before start_run when composing a config
+    by hand.
+    """
+    from . import schema
+
+    return schema.validate_config(solver, config)
+
+
+@mcp.tool()
+def list_materials() -> list[dict[str, Any]]:
+    """Material presets with their property values, units and solver support.
+
+    Gold carries only the lattice-family properties, so the depth-resolved
+    solvers reject it. Any single property can be overridden per run without
+    switching to material='custom'.
+    """
+    from . import schema
+
+    return schema.materials_table()
+
+
+@mcp.tool()
+def start_run(solver: str, config: dict[str, Any] | None = None,
+              case_tag: str = "") -> dict[str, Any]:
     """Start a solver in a background worker and return its run id.
 
-    ``solver`` is a registry id from list_solvers. ``config`` is the solver's
-    cfg dict with the same field names and defaults as the Python library and
-    the MATLAB reference (e.g. material, Pavg, f_rep, spotRadius, tau_FWHM,
-    absorbance, Leff, simDuration). Poll with check_run; fetch the outcome
-    with get_results.
+    solver is an id from list_solvers. config is that solver's cfg dict, whose
+    keys are described by describe_solver. case_tag prefixes the output
+    filenames, which is how a sweep keeps its runs apart.
+
+    The config is validated first, so a typo raises here instead of producing
+    a plausible-looking run on default parameters. The reply carries the pulse
+    count and runtime estimate alongside the run id. Poll with check_run and
+    fetch the outcome with get_results.
     """
+    from . import schema
     from .runtools import get_solver
 
     get_solver(solver)  # validate the id before spawning
+    report = schema.validate_config(solver, config)
+    if not report["ok"]:
+        raise ValueError(_render_problems(solver, report["errors"]))
+
+    config = dict(config or {})
+    if case_tag:
+        config["caseTag"] = case_tag
+
     run_id = uuid.uuid4().hex[:12]
     run_dir = os.path.join(_runs_root(), run_id)
     os.makedirs(run_dir, exist_ok=True)
@@ -164,7 +260,11 @@ def start_run(solver: str, config: dict[str, Any] | None = None) -> dict[str, An
     proc.start()
     _RUNS[run_id] = {"process": proc, "solver": solver,
                      "started": time.time(), "dir": run_dir}
-    return _status(run_id)
+    out = _status(run_id)
+    out["estimate"] = report["estimate"]
+    if report["warnings"]:
+        out["warnings"] = report["warnings"]
+    return out
 
 
 @mcp.tool()
@@ -221,10 +321,25 @@ def run_quick(solver: str, config: dict[str, Any] | None = None,
               timeout_s: float = 60) -> dict[str, Any]:
     """Run a solver and wait up to timeout_s for it to finish.
 
-    Convenience for short runs (small pulse counts). If the run outlives the
-    timeout it keeps going in the background and this returns its run id for
-    check_run / get_results.
+    Convenience for short runs. When the estimate already exceeds the
+    timeout this refuses immediately and points at start_run, rather than
+    burning the timeout to return a half-answer. If a run outlives the
+    timeout anyway it keeps going in the background and this returns its run
+    id for check_run and get_results.
     """
+    from . import schema
+
+    estimate = schema.estimate_run(solver, config)
+    if estimate["estRuntime_s"] > timeout_s:
+        return {
+            "ok": False,
+            "reason": f"This config is {estimate['nPulses']} pulses, very "
+                      f"roughly {estimate['estRuntime_s']:g} s, which "
+                      f"exceeds the {timeout_s:g} s timeout.",
+            "estimate": estimate,
+            "use": "start_run",
+        }
+
     started = start_run(solver, config)
     run_id = started["run_id"]
     deadline = time.time() + timeout_s
