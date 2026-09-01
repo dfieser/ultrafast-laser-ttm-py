@@ -28,6 +28,14 @@ Thanks for your interest in improving this repository.
 3. update `README.md` or `docs/` if user-facing behavior changed
 4. keep pull requests small enough that solver behavior changes are easy to review
 
+## Using an AI coding agent
+
+[AGENTS.md](AGENTS.md) holds the constraints an agent needs before changing
+anything here, chiefly that solver numerics are pinned to the MATLAB golden
+fixtures and that the published interface is additive only. Most agent tools
+read that file automatically. Please do not add AI attribution to commits or
+pull requests.
+
 ## Scope guidance
 
 This repository stays centered on reusable pulsed-laser thermal modeling workflows. Changes that mainly serve one historical study, or one manuscript-specific validation campaign, generally belong outside the public-facing copy.
