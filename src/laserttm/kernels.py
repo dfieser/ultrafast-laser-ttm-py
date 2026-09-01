@@ -190,20 +190,8 @@ KHYBRID_W_T = np.array([293.0, 300.0, 400.0, 600.0, 800.0, 1000.0,
                         1200.0, 1500.0, 2000.0, 2500.0])
 KHYBRID_W_K = np.array([174.9, 174.0, 159.0, 137.0, 125.0, 118.0,
                         113.0, 107.0, 100.0, 95.0])
-
-
-def k_table_for(material: str, ke0: float, kl: float):
-    """Return the (T, k) table implementing kHybridFunc for a material.
-
-    Tungsten gets the measured k(T) table; every other material falls back
-    to a constant ke0 + kl (as in the MATLAB depth/radial solvers). The
-    constant case is encoded as a flat two-point table so a single jitted
-    interpolation path serves both.
-    """
-    if material.lower() == "w":
-        return KHYBRID_W_T.copy(), KHYBRID_W_K.copy()
-    k_total = ke0 + kl
-    return np.array([1.0, 1e12]), np.array([k_total, k_total])
+# The (T, k) table for a run is built by materials.k_table(), which owns the
+# measured-curve-versus-constant choice.
 
 
 @njit(cache=True)

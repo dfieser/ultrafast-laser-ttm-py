@@ -136,9 +136,12 @@ def _apply_overrides(mat: Material, overrides, needs_optical: bool) -> Material:
             changes["k_total"] = new_ke0 + new_kl
         else:
             changes["k_total"] = float(kl)
-        # A hand-supplied conductivity replaces the tabulated k(T) curve
-        # unless the run explicitly asks to keep it.
-        if str(get_cfg_field(overrides, "kTable", "auto")).lower() == "auto":
+        # A conductivity that actually differs from the material's own value
+        # replaces the tabulated k(T) curve, since the table would otherwise
+        # silently ignore what the caller asked for. Restating a preset value
+        # changes nothing. An explicit kTable overrides either way.
+        if (changes["k_total"] != mat.k_total
+                and str(get_cfg_field(overrides, "kTable", "auto")).lower() == "auto"):
             changes["measured_k_table"] = False
 
     if not changes:

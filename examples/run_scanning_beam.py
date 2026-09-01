@@ -12,12 +12,10 @@ from laserttm import scanning_beam_solver
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 params = {
-    # --- Material properties (gamma/Cl/G/kl used only when 'custom') ---
+    # --- Material ---
+    # The preset carries gamma, Cl, G and k. Passing any of those keys here
+    # would override the preset, so leave them out unless that is the intent.
     "material": "W",
-    "gamma": 137.3,
-    "Cl": 2.54e6,
-    "G": 1.65e17,
-    "kl": 174,
     # --- Laser parameters ---
     "Pavg": 40,                    # average power [W]
     "spotRadius": 100e-6,          # 1/e^2 spot radius [m]

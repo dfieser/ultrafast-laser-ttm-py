@@ -104,12 +104,30 @@ def test_conductivity_override_recomputes_the_total():
     assert (mat.ke0, mat.kl, mat.k_total) == (100.0, 20.0, 120.0)
 
 
-def test_hand_supplied_conductivity_drops_the_measured_table():
+def test_changed_conductivity_drops_the_measured_table():
     mat = resolve_material({"material": "W", "kl": 200.0}, needs_optical=False)
     assert mat.k_total == 200.0
     assert not mat.measured_k_table
     _, k_tab = k_table(mat)
     np.testing.assert_array_equal(k_tab, [200.0, 200.0])
+
+
+def test_restating_a_preset_conductivity_is_a_no_op():
+    """Passing tungsten's own k back in must not switch it off the measured
+    k(T) curve: that would silently change computed temperatures."""
+    plain = resolve_material({"material": "W"}, needs_optical=False)
+    restated = resolve_material({"material": "W", "kl": 174.0},
+                                needs_optical=False)
+    assert restated.measured_k_table == plain.measured_k_table is True
+    np.testing.assert_array_equal(k_table(restated)[1], k_table(plain)[1])
+
+    # Same for the optical family, where kl is the lattice term.
+    opt_plain = resolve_material({"material": "W"}, needs_optical=True)
+    opt_restated = resolve_material({"material": "W", "ke0": 150.0, "kl": 24.0},
+                                    needs_optical=True)
+    assert opt_restated.measured_k_table
+    np.testing.assert_array_equal(k_table(opt_restated)[1],
+                                  k_table(opt_plain)[1])
 
 
 def test_k_table_choice_can_be_forced():
