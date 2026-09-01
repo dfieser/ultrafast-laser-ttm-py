@@ -20,7 +20,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.sparse import bmat, diags
 
-from .config import get_cfg_field
+from .config import get_cfg_field, safe_tag
 from .kernels import profile_code, ttm_1d_rhs
 from .materials import k_table, resolve_material
 from .schema import defaults as schema_defaults
@@ -316,13 +316,15 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
     output_dir = get_cfg_field(cfg, "outputDir", default_out)
     os.makedirs(output_dir, exist_ok=True)
 
-    case_tag = get_cfg_field(cfg, "caseTag", "")
+    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
     freq_str = (f"{frep_v:.4g}_{frep_u}").replace(".", "p")
     pulse_str = (f"{tau_v:.4g}_{tau_u}").replace(".", "p")
     power_str = (f"{pavg:.4g}_W").replace(".", "p")
     spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
     out_filename = (f"TTM1D_{freq_str}_{pulse_str}_{power_str}_{spot_str}_"
                     f"{n_pulses}p_{pulse_profile_name}.txt")
+    if case_tag:
+        out_filename = f"{case_tag}__{out_filename}"
     out_path = os.path.join(output_dir, out_filename)
 
     with open(out_path, "w", encoding="utf-8") as fid:

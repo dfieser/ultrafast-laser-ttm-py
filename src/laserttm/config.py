@@ -7,6 +7,7 @@ like the MATLAB ``getCfgField`` helper treats absent/empty struct fields.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -24,3 +25,17 @@ def get_cfg_field(cfg: Mapping[str, Any] | None, name: str, default: Any) -> Any
     if isinstance(value, (str, list, tuple, dict)) and len(value) == 0:
         return default
     return value
+
+
+_TAG_UNSAFE = re.compile(r"[^\w.\-]+")
+
+
+def safe_tag(tag: object) -> str:
+    """Filename-safe form of a case tag.
+
+    Tags are spliced into output filenames, so a path separator or other
+    reserved character would otherwise crash the run at write time, after
+    all the computing is done. Word characters, dots and hyphens pass
+    through; everything else collapses to an underscore.
+    """
+    return _TAG_UNSAFE.sub("_", str(tag)).strip("_")

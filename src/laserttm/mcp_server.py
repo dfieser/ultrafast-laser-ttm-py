@@ -35,6 +35,7 @@ _LOG_NAME = "log.txt"
 _SUMMARY_NAME = "summary.json"
 _ERROR_NAME = "error.json"
 _RESULTS_NAME = "results.npz"
+_RUN_NAME = "run.json"
 
 try:
     from mcp.server.mcpserver import MCPServer  # mcp >= 2
@@ -113,19 +114,34 @@ mcp = MCPServer(
 
 
 def _run_dir(run_id: str) -> str:
-    if run_id not in _RUNS:
-        raise KeyError(f"Unknown run id '{run_id}'. Known: {sorted(_RUNS)}")
-    return _RUNS[run_id]["dir"]
+    if run_id in _RUNS:
+        return _RUNS[run_id]["dir"]
+    # Not started by this process: a run from before a server restart is
+    # still on disk, and its results should stay reachable.
+    candidate = os.path.join(_runs_root(), run_id)
+    if os.path.isdir(candidate):
+        return candidate
+    raise KeyError(f"Unknown run id '{run_id}'. Known: {sorted(_RUNS)}")
 
 
 def _status(run_id: str) -> dict[str, Any]:
     run_dir = _run_dir(run_id)
-    run = _RUNS[run_id]
+    run = _RUNS.get(run_id)
+    if run is None:
+        # Recovered from disk after a restart. The worker process is gone,
+        # so the outcome is whatever it managed to write.
+        info = {}
+        run_json = os.path.join(run_dir, _RUN_NAME)
+        if os.path.exists(run_json):
+            with open(run_json, encoding="utf-8") as f:
+                info = json.load(f)
+        run = {"solver": info.get("solver", "unknown"),
+               "started": info.get("started"), "process": None}
     if os.path.exists(os.path.join(run_dir, _SUMMARY_NAME)):
         status = "done"
     elif os.path.exists(os.path.join(run_dir, _ERROR_NAME)):
         status = "failed"
-    elif run["process"].is_alive():
+    elif run["process"] is not None and run["process"].is_alive():
         status = "running"
     else:
         status = "failed"  # died without writing results
@@ -133,7 +149,8 @@ def _status(run_id: str) -> dict[str, Any]:
         "run_id": run_id,
         "solver": run["solver"],
         "status": status,
-        "elapsed_s": round(time.time() - run["started"], 1),
+        "elapsed_s": (round(time.time() - run["started"], 1)
+                      if run["started"] else None),
         "run_dir": run_dir,
     }
 
@@ -242,17 +259,18 @@ def start_run(solver: str, config: dict[str, Any] | None = None,
     from .runtools import get_solver
 
     get_solver(solver)  # validate the id before spawning
+    config = dict(config or {})
+    if case_tag:
+        config["caseTag"] = case_tag
     report = schema.validate_config(solver, config)
     if not report["ok"]:
         raise ValueError(_render_problems(solver, report["errors"]))
 
-    config = dict(config or {})
-    if case_tag:
-        config["caseTag"] = case_tag
-
     run_id = uuid.uuid4().hex[:12]
     run_dir = os.path.join(_runs_root(), run_id)
     os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, _RUN_NAME), "w", encoding="utf-8") as f:
+        json.dump({"solver": solver, "started": time.time()}, f)
 
     proc = mp.get_context("spawn").Process(
         target=_run_job, args=(solver.strip().lower(), config or {}, run_dir),

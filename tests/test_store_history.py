@@ -46,3 +46,55 @@ def test_independent_mode_results_identical(tmp_path):
     np.testing.assert_array_equal(with_hist["finalRadialProfile_C"],
                                   without["finalRadialProfile_C"])
     assert with_hist["finalResid_C"] == without["finalResid_C"]
+
+
+def test_surface_point_results_identical(tmp_path):
+    from laserttm import surface_point_solver
+
+    cfg = {"Pavg": 10, "f_rep": 5e6, "tau_FWHM": 500e-15,
+           "simDuration": 5 / 5e6, "makePlots": False}
+    with_hist = surface_point_solver(
+        {**cfg, "outputDir": str(tmp_path / "a")})
+    without = surface_point_solver(
+        {**cfg, "outputDir": str(tmp_path / "b"), "storeHistory": False})
+
+    for key in ("finalResid_C", "peakTe_C", "peakTl_C", "peakPulse",
+                "projectedSteadyState_C", "absorbedAreal_J_m2",
+                "depthEnergy_J_m2"):
+        assert with_hist[key] == without[key], key
+    np.testing.assert_array_equal(with_hist["TeqVals_C"],
+                                  without["TeqVals_C"])
+    np.testing.assert_array_equal(with_hist["TresidVals_C"],
+                                  without["TresidVals_C"])
+    assert without["time_s"].size == 0
+    assert with_hist["time_s"].size > 0
+
+    with open(without["outputFile"], encoding="utf-8") as f:
+        report = f.read()
+    assert "XY Data" not in report
+    assert "not retained" in report
+
+
+def test_depth_profile_results_identical(tmp_path):
+    from laserttm import depth_profile_solver
+
+    cfg = {"Pavg": 40, "f_rep": 18e6, "tau_FWHM": 500e-15,
+           "simDuration": 3 / 18e6, "Nz": 60, "Lz": 400e-9,
+           "makePlots": False}
+    with_hist = depth_profile_solver(
+        {**cfg, "outputDir": str(tmp_path / "a")})
+    without = depth_profile_solver(
+        {**cfg, "outputDir": str(tmp_path / "b"), "storeHistory": False})
+
+    for key in ("finalResid_C", "peakTe_C", "peakTl_C", "nPulses"):
+        assert with_hist[key] == without[key], key
+    for key in ("TeqVals_C", "TresidVals_C", "invMaxPerPulse_K",
+                "TePeakPerPulse_C", "TlPeakPerPulse_C"):
+        np.testing.assert_array_equal(with_hist[key], without[key])
+    # The radial view is part of the solution, not the history.
+    np.testing.assert_array_equal(with_hist["radialSurfaceProfiles_C"],
+                                  without["radialSurfaceProfiles_C"])
+
+    with open(without["outputFile"], encoding="utf-8") as f:
+        report = f.read()
+    assert "XY Data" not in report

@@ -11,6 +11,8 @@ import re
 
 import numpy as np
 
+from .config import safe_tag
+
 
 def _time_scale(t_end: float) -> tuple[float, str]:
     """Pick plot time units the way the MATLAB solvers do."""
@@ -29,7 +31,7 @@ def _save_fig(fig, save_dir, name, case_tag=""):
         return None
     tag = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
     if case_tag:
-        tag = f"{case_tag}_{tag}"
+        tag = f"{safe_tag(case_tag)}_{tag}"
     path = f"{save_dir}/{tag}.png"
     fig.savefig(path, dpi=150)
     return path
@@ -46,7 +48,7 @@ def plot_single_pulse(*, all_times, all_te_surf, all_tl_surf, first_pulse_center
     import matplotlib.pyplot as plt
 
     # --- Plot 1: surface temperatures vs time (log axis) -------------------
-    fig1 = plt.figure("Surface_Temperatures_vs_Time", figsize=(8, 5), facecolor="w")
+    fig1 = plt.figure("Surface_Temperatures_vs_Time", clear=True, figsize=(8, 5), facecolor="w")
     ax = fig1.add_subplot(111)
     t_rel = all_times - first_pulse_center
     pos = t_rel > 0
@@ -68,7 +70,7 @@ def plot_single_pulse(*, all_times, all_te_surf, all_tl_surf, first_pulse_center
     _save_fig(fig1, save_dir, "Surface_Temperatures_vs_Time", case_tag)
 
     # --- Parameter panel ----------------------------------------------------
-    fig_p = plt.figure("Simulation_Parameters", figsize=(4.8, 6), facecolor="w")
+    fig_p = plt.figure("Simulation_Parameters", clear=True, figsize=(4.8, 6), facecolor="w")
     lines = [
         "1D TTM Parameters", "",
         f"Material:  {str(material).upper()}",
@@ -108,7 +110,7 @@ def plot_single_pulse(*, all_times, all_te_surf, all_tl_surf, first_pulse_center
         z_max = min(500.0, lz * 1e9)
         fig2, axes = plt.subplots(n_rows, n_cols, figsize=(12, 6.5),
                                   facecolor="w", squeeze=False,
-                                  num="Depth_Profiles_First_Pulse_Snapshots")
+                                  num="Depth_Profiles_First_Pulse_Snapshots", clear=True)
         for si in range(n_snaps):
             axs = axes[si // n_cols][si % n_cols]
             axs.plot(z_plot, snap_te[si] - 273.15, "b-", lw=1.6, label="$T_e$")
@@ -125,7 +127,7 @@ def plot_single_pulse(*, all_times, all_te_surf, all_tl_surf, first_pulse_center
         _save_fig(fig2, save_dir, "Depth_Profiles_First_Pulse_Snapshots", case_tag)
 
         # --- Plot 3: overlaid snapshots -------------------------------------
-        fig3 = plt.figure("Depth_Profiles_Overlaid", figsize=(8, 5), facecolor="w")
+        fig3 = plt.figure("Depth_Profiles_Overlaid", clear=True, figsize=(8, 5), facecolor="w")
         ax3 = fig3.add_subplot(111)
         cmap = plt.get_cmap("tab10")
         for si in range(n_snaps):
@@ -158,7 +160,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
     import matplotlib.pyplot as plt
 
     # --- Plot 1: lattice surface temperature, full timeline ----------------
-    fig1 = plt.figure("Surface_Lattice_Temperature_vs_Time",
+    fig1 = plt.figure("Surface_Lattice_Temperature_vs_Time", clear=True,
                       figsize=(8, 5), facecolor="w")
     ax = fig1.add_subplot(111)
     t_scale, t_unit = _time_scale(all_times[-1])
@@ -171,7 +173,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
     _save_fig(fig1, save_dir, "Surface_Lattice_Temperature_vs_Time", case_tag)
 
     # --- Parameter summary figure ------------------------------------------
-    fig_p = plt.figure("Simulation_Parameters", figsize=(5, 6.5), facecolor="w")
+    fig_p = plt.figure("Simulation_Parameters", clear=True, figsize=(5, 6.5), facecolor="w")
     lines = [
         "1D TTM Parameters", "",
         f"Material:  {str(material).upper()}",
@@ -208,7 +210,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
 
     # --- Plot 1b: heat accumulation per pulse (bars) ------------------------
     if n_pulses > 1:
-        fig1b = plt.figure("Heat_Accumulation_Per_Pulse_Bar",
+        fig1b = plt.figure("Heat_Accumulation_Per_Pulse_Bar", clear=True,
                            figsize=(8, 4.5), facecolor="w")
         axb = fig1b.add_subplot(111)
         x = np.arange(1, n_pulses + 1)
@@ -233,7 +235,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
         z_max = min(500.0, lz * 1e9)
         fig2, axes = plt.subplots(n_rows, n_cols, figsize=(12, 6.5),
                                   facecolor="w", squeeze=False,
-                                  num="Depth_Profiles_First_Pulse_Snapshots")
+                                  num="Depth_Profiles_First_Pulse_Snapshots", clear=True)
         for si in range(n_snaps):
             axs = axes[si // n_cols][si % n_cols]
             axs.plot(z_plot, snap_te[si] - 273.15, "b-", lw=1.6, label="$T_e$")
@@ -249,7 +251,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
         fig2.tight_layout()
         _save_fig(fig2, save_dir, "Depth_Profiles_First_Pulse_Snapshots", case_tag)
 
-        fig3 = plt.figure("Depth_Profiles_Overlaid_First_Pulse",
+        fig3 = plt.figure("Depth_Profiles_Overlaid_First_Pulse", clear=True,
                           figsize=(8.5, 5), facecolor="w")
         ax3 = fig3.add_subplot(111)
         cmap = plt.get_cmap("tab10")
@@ -271,7 +273,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
     n_p_snaps = len(profile_snaps_tz)
     nz_diff = z_grid_diff.size
     if n_p_snaps and n_pulses > 1:
-        fig4 = plt.figure("Depth_Profiles_Heat_Accumulation_MultiPulse",
+        fig4 = plt.figure("Depth_Profiles_Heat_Accumulation_MultiPulse", clear=True,
                           figsize=(9, 5), facecolor="w")
         ax4 = fig4.add_subplot(111)
         colors_acc = plt.get_cmap("viridis")(np.linspace(0, 1, n_p_snaps))
@@ -304,7 +306,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
         surface_profiles_c = radial_view["radialSurfaceProfiles_C"]
 
         # Plot 5: radial surface temperature buildup
-        fig5 = plt.figure("Radial_Surface_Temperature_Buildup_MultiPulse",
+        fig5 = plt.figure("Radial_Surface_Temperature_Buildup_MultiPulse", clear=True,
                           figsize=(9, 5), facecolor="w")
         ax5 = fig5.add_subplot(111)
         colors_rad = plt.get_cmap("viridis")(np.linspace(0, 1, n_p_snaps))
@@ -333,7 +335,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
                            z_grid_diff[min(heated[-1] + 5, nz_diff - 1)] * 1e6)
         z_max_cs = max(z_max_cs, 5.0)
 
-        fig6 = plt.figure("Cross_Section_Depth_vs_Radius_Final",
+        fig6 = plt.figure("Cross_Section_Depth_vs_Radius_Final", clear=True,
                           figsize=(9, 5), facecolor="w")
         ax6 = fig6.add_subplot(111)
         z_diff_um = z_grid_diff * 1e6
@@ -357,7 +359,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
                 n_rows_cs, n_cols_cs,
                 figsize=(min(14, 3.5 * n_cols_cs), min(9, 2.8 * n_rows_cs)),
                 facecolor="w", squeeze=False,
-                num="Cross_Section_Evolution_Over_Pulses")
+                num="Cross_Section_Evolution_Over_Pulses", clear=True)
             c_lim_lo = t0 - 273.15
             c_lim_hi = float(np.max(profile_snaps_tz[-1])) - 273.15
             pm7 = None
@@ -388,7 +390,7 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
             r_sample_labels = ["r = 0 (center)", "r = 0.5w", "r = 1.0w",
                                "r = 1.5w", "r = 2.0w"]
             fluence_at_sample = np.exp(-2.0 * r_sample_factors**2)
-            fig8 = plt.figure("Residual_Temperature_vs_Pulse_Multiple_Radii",
+            fig8 = plt.figure("Residual_Temperature_vs_Pulse_Multiple_Radii", clear=True,
                               figsize=(9, 4.8), facecolor="w")
             ax8 = fig8.add_subplot(111)
             cmap8 = plt.get_cmap("tab10")
@@ -423,7 +425,7 @@ def plot_radial_profile(*, all_times, all_tl_surf, r_plot_um, r_grid,
     import matplotlib.pyplot as plt
 
     # --- Plot 1: centre timeline + parameter panel --------------------------
-    fig1 = plt.figure("Radial_TTM_Center_Temperature_Timeline",
+    fig1 = plt.figure("Radial_TTM_Center_Temperature_Timeline", clear=True,
                       figsize=(12, 6), facecolor="w")
     ax1 = fig1.add_axes((0.07, 0.12, 0.42, 0.78))
     t_scale, t_unit = _time_scale(all_times[-1])
@@ -466,7 +468,7 @@ def plot_radial_profile(*, all_times, all_tl_surf, r_plot_um, r_grid,
     # --- Plot 2: radial surface temperature buildup -------------------------
     n_snaps = snap_radial_profiles.shape[0]
     if n_snaps > 0:
-        fig2 = plt.figure("Radial_Surface_Temperature_Buildup",
+        fig2 = plt.figure("Radial_Surface_Temperature_Buildup", clear=True,
                           figsize=(9, 5), facecolor="w")
         ax2 = fig2.add_subplot(111)
         colors_rad = plt.get_cmap("viridis")(np.linspace(0, 1, n_snaps))
@@ -490,7 +492,7 @@ def plot_radial_profile(*, all_times, all_tl_surf, r_plot_um, r_grid,
         _save_fig(fig2, save_dir, "Radial_Surface_Temperature_Buildup", case_tag)
 
     # --- Plot 3: top-down 2D heatmap of the final state ---------------------
-    fig3 = plt.figure("Surface_Temperature_Heatmap_Top_Down",
+    fig3 = plt.figure("Surface_Temperature_Heatmap_Top_Down", clear=True,
                       figsize=(7, 6.2), facecolor="w")
     ax3 = fig3.add_subplot(111)
     final_radial_c = tresid_radial[-1] - 273.15
@@ -523,7 +525,7 @@ def plot_radial_profile(*, all_times, all_tl_surf, r_plot_um, r_grid,
         r_sample_factors = [0.0, 0.5, 1.0, 1.5, 2.0]
         r_sample_labels = ["r = 0 (center)", "r = 0.5w", "r = 1.0w",
                            "r = 1.5w", "r = 2.0w"]
-        fig4 = plt.figure("Heat_Accumulation_at_Multiple_Radii",
+        fig4 = plt.figure("Heat_Accumulation_at_Multiple_Radii", clear=True,
                           figsize=(9, 4.8), facecolor="w")
         ax4 = fig4.add_subplot(111)
         cmap4 = plt.get_cmap("tab10")
@@ -546,7 +548,7 @@ def plot_radial_profile(*, all_times, all_tl_surf, r_plot_um, r_grid,
 
     # --- Plot 5: heat buildup per pulse (centre, bars) ----------------------
     if n_pulses > 1:
-        fig5 = plt.figure("Heat_Buildup_Per_Pulse_Center",
+        fig5 = plt.figure("Heat_Buildup_Per_Pulse_Center", clear=True,
                           figsize=(8, 4.5), facecolor="w")
         ax5 = fig5.add_subplot(111)
         x = np.arange(1, n_pulses + 1)
@@ -575,7 +577,7 @@ def plot_inversion_quantifier(*, n_pulses, inv_max, tbase, te_peak, tl_peak,
     pulses = np.arange(1, n_pulses + 1)
 
     # --- Plot 1: inversion magnitude vs pulse with base temperature ---------
-    fig1 = plt.figure("Inversion_Magnitude_vs_Pulse", figsize=(9, 4.8),
+    fig1 = plt.figure("Inversion_Magnitude_vs_Pulse", clear=True, figsize=(9, 4.8),
                       facecolor="w")
     ax1 = fig1.add_subplot(111)
     ax1.plot(pulses, inv_max, "b-o", ms=3, lw=1.3, mfc="b",
@@ -594,7 +596,7 @@ def plot_inversion_quantifier(*, n_pulses, inv_max, tbase, te_peak, tl_peak,
 
     # --- Plot 2: inversion vs base temperature (correlation) ----------------
     if n_inv_pulses > 2:
-        fig2 = plt.figure("Inversion_vs_Base_Temperature", figsize=(7.5, 4.8),
+        fig2 = plt.figure("Inversion_vs_Base_Temperature", clear=True, figsize=(7.5, 4.8),
                           facecolor="w")
         ax2 = fig2.add_subplot(111)
         inv_pulse_idx = np.flatnonzero(has_inversion) + 1
@@ -610,7 +612,7 @@ def plot_inversion_quantifier(*, n_pulses, inv_max, tbase, te_peak, tl_peak,
 
     # --- Plot 3: electron and lattice dynamics per pulse --------------------
     fig3, (ax3a, ax3b) = plt.subplots(1, 2, figsize=(11, 5), facecolor="w",
-                                      num="Electron_Lattice_Dynamics_Per_Pulse")
+                                      num="Electron_Lattice_Dynamics_Per_Pulse", clear=True)
     ax3a.plot(pulses, te_peak, "b-", lw=1.4, label="Peak $T_e$")
     ax3a.plot(pulses, tl_peak, "r-", lw=1.4, label="Peak $T_l$")
     ax3a.plot(pulses, tbase, "k--", lw=1.0, label="$T_{base}$")
@@ -639,7 +641,7 @@ def plot_inversion_quantifier(*, n_pulses, inv_max, tbase, te_peak, tl_peak,
 
     # --- Plot 4: inversion timing and duration vs pulse ---------------------
     fig4, (ax4a, ax4b) = plt.subplots(2, 1, figsize=(8.5, 5), facecolor="w",
-                                      num="Inversion_Timing_vs_Pulse")
+                                      num="Inversion_Timing_vs_Pulse", clear=True)
     valid_mask = ~np.isnan(t_max_inv)
     if valid_mask.any():
         t_arr = t_max_inv[valid_mask]
@@ -772,7 +774,7 @@ def plot_surface_point(*, times, tl, t_end, teq_vals, tresid_vals,
     import matplotlib.pyplot as plt
 
     n_pulses = teq_vals.size
-    fig = plt.figure("Surface TTM — Temperature Evolution",
+    fig = plt.figure("Surface TTM — Temperature Evolution", clear=True,
                      figsize=(12, 6), facecolor="w")
 
     # --- Left panel: full continuous timeline -----------------------------

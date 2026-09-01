@@ -14,9 +14,30 @@ from datetime import datetime
 
 import numpy as np
 
-from .config import get_cfg_field
+from .config import get_cfg_field, safe_tag
 from .depth_profile import depth_profile_solver
 from .units import smart_energy, smart_freq, smart_length, smart_time
+
+
+def _resolve_out_path(cfg, f_rep, tau_fwhm, pavg, spot_radius, n_pulses):
+    """Output directory and report path, shared by both result branches."""
+    default_out = os.path.join(os.getcwd(), "outputs")
+    output_dir = get_cfg_field(cfg, "outputDir", default_out)
+    os.makedirs(output_dir, exist_ok=True)
+
+    frep_v, frep_u = smart_freq(f_rep)
+    tau_v, tau_u = smart_time(tau_fwhm)
+    spot_v, spot_u = smart_length(spot_radius)
+    freq_str = (f"{frep_v:.4g}_{frep_u}").replace(".", "p")
+    pulse_str = (f"{tau_v:.4g}_{tau_u}").replace(".", "p")
+    power_str = (f"{pavg:.4g}_W").replace(".", "p")
+    spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
+    out_filename = (f"Inversion_Analysis_{freq_str}_{pulse_str}_{power_str}_"
+                    f"{spot_str}_{n_pulses}p.txt")
+    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
+    if case_tag:
+        out_filename = f"{case_tag}__{out_filename}"
+    return output_dir, os.path.join(output_dir, out_filename)
 
 
 def inversion_quantifier(cfg: dict | None = None) -> dict:
@@ -91,10 +112,30 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
         print("    - Pulse energy too low")
         print("    - Spatial grid too coarse to resolve inversion")
         print("    - Pulse width too long (inversion is a femtosecond phenomenon)")
+        # An absent inversion is still a result: write the report and return
+        # real paths, so the contract's outputFile always exists.
+        output_dir, out_path = _resolve_out_path(
+            cfg, f_rep, tau_fwhm, pavg, spot_radius, n_pulses)
+        with open(out_path, "w", encoding="utf-8") as fid:
+            fid.write("=" * 60 + "\n")
+            fid.write("  Temperature Inversion Quantifier — Output\n")
+            # Local wall-clock on purpose, matching the MATLAB reference
+            fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
+            fid.write("=" * 60 + "\n\n")
+            fid.write(f"--- Material: {str(material).upper()} ---\n\n")
+            fid.write(f"  Pulses analyzed:  {n_pulses}\n")
+            fid.write(f"  Pulses with inversion (Tl-Te > "
+                      f"{inv_threshold:.1f} K): 0\n\n")
+            fid.write("  No significant inversion detected in any pulse.\n")
+            fid.write("  Possible causes: pulse energy too low, spatial grid\n")
+            fid.write("  too coarse to resolve it, or pulse width too long\n")
+            fid.write("  for this femtosecond-scale phenomenon.\n")
+        print(f"  Output written to: {out_path}")
         return _build_results(
             cfg, dr, n_pulses, material, inv_max, te_peak, tl_peak,
             tbase, teq, tresid, t_max_inv, t_onset, inv_dur, te_at_inv, tl_at_inv,
-            0, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, "", "")
+            0, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan, np.nan,
+            out_path, output_dir)
 
     inv_max_valid = inv_max[has_inversion]
     tbase_valid = tbase[has_inversion]
@@ -150,25 +191,12 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
     print(f"  Mean inv fraction: {100 * np.mean(inv_fraction):.1f}% of Te excursion")
 
     # ==================  Output file  =======================================
-    default_out = os.path.join(os.getcwd(), "outputs")
-    output_dir = get_cfg_field(cfg, "outputDir", default_out)
-    os.makedirs(output_dir, exist_ok=True)
-
+    output_dir, out_path = _resolve_out_path(
+        cfg, f_rep, tau_fwhm, pavg, spot_radius, n_pulses)
     frep_v, frep_u = smart_freq(f_rep)
     tau_v, tau_u = smart_time(tau_fwhm)
     ep_v, ep_u = smart_energy(pavg / f_rep)
     spot_v, spot_u = smart_length(spot_radius)
-
-    freq_str = (f"{frep_v:.4g}_{frep_u}").replace(".", "p")
-    pulse_str = (f"{tau_v:.4g}_{tau_u}").replace(".", "p")
-    power_str = (f"{pavg:.4g}_W").replace(".", "p")
-    spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
-    out_filename = (f"Inversion_Analysis_{freq_str}_{pulse_str}_{power_str}_"
-                    f"{spot_str}_{n_pulses}p.txt")
-    case_tag = get_cfg_field(cfg, "caseTag", "")
-    if case_tag:
-        out_filename = f"{case_tag}__{out_filename}"
-    out_path = os.path.join(output_dir, out_filename)
 
     with open(out_path, "w", encoding="utf-8") as fid:
         fid.write("============================================================\n")

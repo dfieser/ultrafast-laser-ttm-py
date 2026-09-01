@@ -354,6 +354,12 @@ _KL_LATTICE = {"summary": "Lattice conductivity term, the kl of ke0 + kl. "
                         "kl is the lattice component only, not the total."}
 # kl_manual follows the same split, so its default differs by family: the
 # lattice term for the depth-resolved solvers, the total for the others.
+_KTABLE_INERT = {
+    "notes": "No effect in this solver: it uses a single constant "
+             "conductivity rather than a k(T) table."}
+_TMELT_INERT = {
+    "notes": "Stored on the material record, but only the radial solver's "
+             "melt early stop reads it."}
 _KL_MANUAL_LATTICE = {
     "default": 24.0,
     "summary": "Lattice conductivity term for material='custom'.",
@@ -374,9 +380,9 @@ _SURFACE_POINT = SolverSchema(
     params=_params(
         *_MATERIAL_LATTICE, "Pavg", "spotRadius", "f_rep", "tau_FWHM",
         "pulseProfile", "absorbance", "T0_C", "simDuration",
-        "Leff", "depthProfile", "dzTarget", "Ndiff",
-        "makePlots", "saveFigures", "outputDir", "showProgress",
-        kl=_KL_TOTAL,
+        "Leff", "depthProfile", "dzTarget", "Ndiff", "storeHistory",
+        "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
+        kl=_KL_TOTAL, kTable=_KTABLE_INERT, T_melt_C=_TMELT_INERT,
         Pavg={"default": 1.0}, spotRadius={"default": 80e-6},
         f_rep={"default": 1e6}, tau_FWHM={"default": 500e-15},
     ),
@@ -405,8 +411,10 @@ _DEPTH_PROFILE = SolverSchema(
         "pulseProfile", "absorbance", "T0_C", "simDuration",
         "Lz", "Nz", "snapshotDelays", "enableRadialProfile", "Nr_radial",
         "rMax_factor", "dzTarget_diff", "Ndiff", "relTol", "absTol",
+        "storeHistory",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
         kl=_KL_LATTICE, kl_manual=_KL_MANUAL_LATTICE,
+        T_melt_C=_TMELT_INERT,
         rMax_factor={"default": 3.0, "affects_numerics": False,
                      "notes": "Sets the extent of the derived radial view "
                               "only. It does not affect the depth solution."},
@@ -468,6 +476,7 @@ _SINGLE_PULSE = SolverSchema(
         "relTol", "absTol",
         "makePlots", "saveFigures", "outputDir", "caseTag",
         kl=_KL_LATTICE, kl_manual=_KL_MANUAL_LATTICE,
+        T_melt_C=_TMELT_INERT,
         Pavg={"default": 1.0}, spotRadius={"default": 80e-6},
         f_rep={"default": 1e6,
                "notes": "Only sets the pulse energy, Pavg / f_rep. This "
@@ -497,6 +506,7 @@ _INVERSION = SolverSchema(
         "relTol", "absTol", "depthResults",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
         kl=_KL_LATTICE, kl_manual=_KL_MANUAL_LATTICE,
+        T_melt_C=_TMELT_INERT,
     ),
     files=("Inversion_Analysis_<params>_<n>p.txt",),
     seconds_per_pulse=0.135,
@@ -516,8 +526,8 @@ _SCANNING_BEAM = SolverSchema(
         "pulseProfile", "absorbance", "T0_C", "v_scan", "scanLength",
         "Leff", "depthProfile", "dzTarget", "Ndiff", "NadiPerGap",
         "Nx", "Ny", "xPad", "yExtent",
-        "makePlots", "saveFigures", "outputDir", "showProgress",
-        kl=_KL_TOTAL,
+        "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
+        kl=_KL_TOTAL, kTable=_KTABLE_INERT, T_melt_C=_TMELT_INERT,
     ),
     files=("TTMmov_<params>_<n>p.txt", "TTMmov_<params>_<n>p_surface.mat"),
     seconds_per_pulse=2e-5,
@@ -595,6 +605,21 @@ def _matlab_round(x: float) -> int:
     return math.floor(x + 0.5)
 
 
+def _effective(sch: SolverSchema, cfg: dict | None) -> dict[str, Any]:
+    """Defaults overlaid with the config, honoring MATLAB empty semantics.
+
+    A key set to None or an empty string/collection means "use the default",
+    exactly as config.get_cfg_field treats it at the solver's own read sites.
+    """
+    merged = sch.defaults()
+    for key, value in (cfg or {}).items():
+        if value is None or (isinstance(value, (str, list, tuple, dict))
+                             and len(value) == 0):
+            continue
+        merged[key] = value
+    return merged
+
+
 def require_pulses(solver_id: str, n_pulses: int) -> None:
     """Reject a config that rounds to no pulses, before the solver runs.
 
@@ -622,7 +647,7 @@ def estimate_run(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
     blocking call and a background job, not for benchmarking.
     """
     sch = solver_schema(solver_id)
-    merged = {**sch.defaults(), **(dict(cfg) if cfg else {})}
+    merged = _effective(sch, cfg)
 
     if sch.id == "single_pulse":
         n_pulses = 1
@@ -737,7 +762,8 @@ def validate_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
             continue  # MATLAB empty semantics: falls back to the default
 
         if spec.kind == "enum" and spec.choices:
-            if str(value) not in spec.choices:
+            # Read sites lowercase enum values, so validation must too.
+            if str(value).lower() not in {c.lower() for c in spec.choices}:
                 errors.append({
                     "code": "bad_enum", "key": key, "value": value,
                     "message": f"'{value}' is not a valid {key}.",
@@ -780,7 +806,7 @@ def validate_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
                     "suggestion": "This is allowed. Check it is intended.",
                 })
 
-    resolved = {**sch.defaults(), **cfg}
+    resolved = _effective(sch, cfg)
     estimate = estimate_run(sch.id, cfg) if not errors else None
 
     # A config that rounds to no pulses at all is not runnable: the pulse loop

@@ -21,7 +21,7 @@ from datetime import datetime
 
 import numpy as np
 
-from .config import get_cfg_field
+from .config import get_cfg_field, safe_tag
 from .kernels import (
     cn_coast_kt,
     cn_depth_multi_kt,
@@ -617,7 +617,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
     out_filename = (f"TTM_Radial_Result_{freq_str}_{pulse_str}_{power_str}_"
                     f"{spot_str}_{n_pulses}p_{pulse_profile_name}.txt")
-    case_tag = get_cfg_field(cfg, "caseTag", "")
+    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
     if case_tag:
         out_filename = f"{case_tag}__{out_filename}"
     out_path = os.path.join(output_dir, out_filename)

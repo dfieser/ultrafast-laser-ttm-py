@@ -24,7 +24,7 @@ import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.sparse import bmat, diags
 
-from .config import get_cfg_field
+from .config import get_cfg_field, safe_tag
 from .kernels import (
     cn_coast_kt,
     k_hybrid,
@@ -101,6 +101,16 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     save_figures = get_cfg_field(cfg, "saveFigures", d["saveFigures"])
     if save_figures:
         make_plots = True
+
+    # storeHistory=False drops the per-sample surface time series, which
+    # grows without bound and feeds only the timeline figures and the
+    # report's XY table. Per-pulse metrics and every summary number are
+    # unchanged, tracked incrementally instead.
+    store_history = bool(get_cfg_field(cfg, "storeHistory", d["storeHistory"]))
+    if not store_history and make_plots:
+        print("  storeHistory=False: time-history figures disabled.")
+        make_plots = False
+        save_figures = False
 
     print("=== 1D Two-Temperature Model Pulsed Laser Calculator ===")
 
@@ -250,6 +260,14 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     sample_interval = max(1, n_diff // n_coast_sample)
     progress_interval = max(1, n_pulses // 20)
 
+    # Incremental summaries for storeHistory=False, replicating what the
+    # concatenated surface arrays would yield.
+    track_te_peak = -np.inf
+    track_tl_peak = -np.inf
+    track_peak_pulse = 1
+    track_peak_time = 0.0
+    track_nt = 0
+
     tic_all = time.perf_counter()
     progress = ProgressReporter(n_pulses, title="laserttm: depth profile",
                                 enabled=show_progress)
@@ -295,9 +313,20 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         te_s = y_sol[:, 0]
         tl_s = y_sol[:, nz]
 
-        cell_times_fine.append(t_sol)
-        cell_te_fine.append(te_s)
-        cell_tl_fine.append(tl_s)
+        if store_history:
+            # Copies, not views: te_s and tl_s are columns of the pulse's
+            # full BDF solution, and keeping views would pin every y_sol.
+            cell_times_fine.append(t_sol)
+            cell_te_fine.append(te_s.copy())
+            cell_tl_fine.append(tl_s.copy())
+        else:
+            i_max = int(np.argmax(te_s))
+            if te_s[i_max] > track_te_peak:
+                track_te_peak = float(te_s[i_max])
+                track_peak_pulse = np_i
+                track_peak_time = float(t_sol[i_max])
+            track_tl_peak = max(track_tl_peak, float(tl_s.max()))
+            track_nt += t_sol.size
         te_peak_per_pulse[np_i - 1] = te_s.max()
         tl_peak_per_pulse[np_i - 1] = tl_s.max()
         base_temp_per_pulse[np_i - 1] = te_s[0]
@@ -398,12 +427,25 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
             tz_diff, c_t, c_tl = cn_coast_kt(
                 tz_diff, coast_gap, n_diff, dz_diff, t0, cl,
                 k_tab_t, k_tab_k, t_fine_end, sample_interval)
-            cell_coast_t.append(c_t)
-            cell_coast_tl.append(c_tl)
+            if store_history:
+                cell_coast_t.append(c_t)
+                cell_coast_tl.append(c_tl)
+            elif c_tl.size:
+                # The stitched Te trace carries the coast surface samples too.
+                c_imax = int(np.argmax(c_tl))
+                if c_tl[c_imax] > track_te_peak:
+                    track_te_peak = float(c_tl[c_imax])
+                    track_peak_pulse = np_i
+                    track_peak_time = float(c_t[c_imax])
+                track_tl_peak = max(track_tl_peak, float(c_tl[c_imax]))
+                track_nt += c_t.size
+            n_coast_steps = c_t.size
             tresidual = tz_diff[0]
         else:
-            cell_coast_t.append(np.empty(0))
-            cell_coast_tl.append(np.empty(0))
+            if store_history:
+                cell_coast_t.append(np.empty(0))
+                cell_coast_tl.append(np.empty(0))
+            n_coast_steps = 0
             tresidual = teq
 
         tresid_vals[np_i - 1] = tresidual
@@ -417,45 +459,89 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
             print(f"    Pulse {np_i}/{n_pulses}: "
                   f"Te_peak={te_peak_per_pulse[np_i - 1] - 273.15:.0f} degC, "
                   f"Teq={teq - 273.15:.1f} degC, Tresid={tresidual - 273.15:.1f} degC  "
-                  f"({t_sol.size} fine + {cell_coast_t[-1].size} coast)")
+                  f"({t_sol.size} fine + {n_coast_steps} coast)")
         progress.update(np_i)
 
     progress.close()
     wall_time = time.perf_counter() - tic_all
     print(f"  Simulation wall time: {wall_time:.2f} s")
 
-    # --- Stitch per-pulse arrays into global vectors ---
-    all_times = np.concatenate([
-        arr for pair in zip(cell_times_fine, cell_coast_t) for arr in pair])
-    all_te_surf = np.concatenate([
-        arr for pair in zip(cell_te_fine, cell_coast_tl) for arr in pair])
-    all_tl_surf = np.concatenate([
-        arr for pair in zip(cell_tl_fine, cell_coast_tl) for arr in pair])
-    pulse_start_idx = np.zeros(n_pulses, dtype=np.int64)
-    pulse_end_idx = np.zeros(n_pulses, dtype=np.int64)
-    ptr = 0
-    for p in range(n_pulses):
-        pulse_start_idx[p] = ptr
-        ptr += cell_times_fine[p].size
-        pulse_end_idx[p] = ptr - 1
-        ptr += cell_coast_t[p].size
-
-    # ==================  Post-processing  ===================================
-    d_t_surf = all_tl_surf - all_te_surf
-    inversion_mask = d_t_surf > _INV_THRESHOLD_K
     first_pulse_center = pulse_offset
+    if store_history:
+        # --- Stitch per-pulse arrays into global vectors ---
+        all_times = np.concatenate([
+            arr for pair in zip(cell_times_fine, cell_coast_t) for arr in pair])
+        all_te_surf = np.concatenate([
+            arr for pair in zip(cell_te_fine, cell_coast_tl) for arr in pair])
+        all_tl_surf = np.concatenate([
+            arr for pair in zip(cell_tl_fine, cell_coast_tl) for arr in pair])
+        pulse_start_idx = np.zeros(n_pulses, dtype=np.int64)
+        pulse_end_idx = np.zeros(n_pulses, dtype=np.int64)
+        ptr = 0
+        for p in range(n_pulses):
+            pulse_start_idx[p] = ptr
+            ptr += cell_times_fine[p].size
+            pulse_end_idx[p] = ptr - 1
+            ptr += cell_coast_t[p].size
 
-    if inversion_mask.any():
-        inv_idx = np.flatnonzero(inversion_mask)
-        max_inv_rel_idx = int(np.argmax(d_t_surf[inv_idx]))
-        max_inv_all = d_t_surf[inv_idx][max_inv_rel_idx]
-        max_inv_idx_all = inv_idx[max_inv_rel_idx]
-        t_inv_onset = all_times[inv_idx[0]] - first_pulse_center
-        t_inv_max = all_times[max_inv_idx_all] - first_pulse_center
-        te_at_max_inv = all_te_surf[max_inv_idx_all]
-        tl_at_max_inv = all_tl_surf[max_inv_idx_all]
-        inv_detected = True
+        # ==================  Post-processing  ===============================
+        d_t_surf = all_tl_surf - all_te_surf
+        inversion_mask = d_t_surf > _INV_THRESHOLD_K
 
+        if inversion_mask.any():
+            inv_idx = np.flatnonzero(inversion_mask)
+            max_inv_rel_idx = int(np.argmax(d_t_surf[inv_idx]))
+            max_inv_all = d_t_surf[inv_idx][max_inv_rel_idx]
+            max_inv_idx_all = inv_idx[max_inv_rel_idx]
+            t_inv_onset = all_times[inv_idx[0]] - first_pulse_center
+            t_inv_max = all_times[max_inv_idx_all] - first_pulse_center
+            te_at_max_inv = all_te_surf[max_inv_idx_all]
+            tl_at_max_inv = all_tl_surf[max_inv_idx_all]
+            inv_detected = True
+        else:
+            inv_detected = False
+
+        idx_te_peak = int(np.argmax(all_te_surf))
+        te_peak_all = all_te_surf[idx_te_peak]
+        tl_peak_all = all_tl_surf.max()
+        t_peak_te_rel = all_times[idx_te_peak] - first_pulse_center
+
+        peak_pulse = 1
+        for p in range(n_pulses):
+            if pulse_start_idx[p] <= idx_te_peak <= pulse_end_idx[p]:
+                peak_pulse = p + 1
+                break
+        nt_total = all_times.size
+        te_last = float(all_te_surf[-1])
+        tl_last = float(all_tl_surf[-1])
+    else:
+        # The same quantities from the per-pulse records. The whole-run
+        # first crossing is the first pulse's crossing, and the global peak
+        # is the first pulse whose fine-grid peak reaches the global max.
+        all_times = np.empty(0)
+        all_te_surf = np.empty(0)
+        all_tl_surf = np.empty(0)
+
+        max_inv_all = float(np.max(inv_max_per_pulse)) if n_pulses else 0.0
+        inv_detected = bool(max_inv_all > _INV_THRESHOLD_K)
+        if inv_detected:
+            p_max = int(np.argmax(inv_max_per_pulse))
+            t_inv_max = p_max * trep + float(t_max_inv_per_pulse[p_max])
+            onset_pulses = np.flatnonzero(~np.isnan(t_inv_onset_per_pulse))
+            p_on = int(onset_pulses[0])
+            t_inv_onset = p_on * trep + float(t_inv_onset_per_pulse[p_on])
+            te_at_max_inv = float(te_at_max_inv_per_pulse[p_max])
+            tl_at_max_inv = float(tl_at_max_inv_per_pulse[p_max])
+
+        te_peak_all = track_te_peak
+        tl_peak_all = track_tl_peak
+        t_peak_te_rel = track_peak_time - first_pulse_center
+        peak_pulse = track_peak_pulse
+        nt_total = track_nt
+        te_last = float(tresid_vals[-1])
+        tl_last = float(tresid_vals[-1])
+
+    if inv_detected:
         on_v, on_u = smart_time(t_inv_onset)
         mx_v, mx_u = smart_time(t_inv_max)
         print("\n  ** SURFACE TEMPERATURE INVERSION DETECTED (Tl > Te) **")
@@ -464,20 +550,9 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         print(f"  At max inv:     Te = {te_at_max_inv - 273.15:.0f} degC,  "
               f"Tl = {tl_at_max_inv - 273.15:.0f} degC")
     else:
-        inv_detected = False
         print("\n  No significant temperature inversion detected.")
 
-    idx_te_peak = int(np.argmax(all_te_surf))
-    te_peak_all = all_te_surf[idx_te_peak]
-    tl_peak_all = all_tl_surf.max()
-    t_peak_te_rel = all_times[idx_te_peak] - first_pulse_center
     pk_te_v, pk_te_u = smart_time(t_peak_te_rel)
-
-    peak_pulse = 1
-    for p in range(n_pulses):
-        if pulse_start_idx[p] <= idx_te_peak <= pulse_end_idx[p]:
-            peak_pulse = p + 1
-            break
 
     e_input = n_pulses * eabs_areal
     du_depth = cl * _trapezoid(tz_diff - t0, z_grid_diff)
@@ -517,14 +592,14 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     print(f"  Diff steps/period:       {n_diff}")
     print(f"  Pulses simulated:        {n_pulses}")
     print(f"  Simulation duration:     {sim_dur_v:.4g} {sim_dur_u}")
-    print(f"  Total time points:       {all_times.size}")
+    print(f"  Total time points:       {nt_total}")
     print(f"  Wall time:               {wall_time:.2f} s")
     print("------------------------------------------------------------")
     print(f"  Peak surface Te:         {te_peak_all - 273.15:.1f} degC  "
           f"(pulse {peak_pulse}, at {pk_te_v:.4g} {pk_te_u})")
     print(f"  Peak surface Tl:         {tl_peak_all - 273.15:.1f} degC")
-    print(f"  Final surface Te:        {all_te_surf[-1] - 273.15:.2f} degC")
-    print(f"  Final surface Tl:        {all_tl_surf[-1] - 273.15:.2f} degC")
+    print(f"  Final surface Te:        {te_last - 273.15:.2f} degC")
+    print(f"  Final surface Tl:        {tl_last - 273.15:.2f} degC")
     print(f"  Final residual (surf):   {tresid_vals[-1] - 273.15:.2f} degC  (after diffusion)")
     print("------------------------------------------------------------")
     if inv_detected:
@@ -546,7 +621,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
     out_filename = (f"TTM_1D_Result_{freq_str}_{pulse_str}_{power_str}_"
                     f"{spot_str}_{n_pulses}p_{pulse_profile_name}.txt")
-    case_tag = get_cfg_field(cfg, "caseTag", "")
+    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
     if case_tag:
         out_filename = f"{case_tag}__{out_filename}"
     out_path = os.path.join(output_dir, out_filename)
@@ -580,13 +655,13 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         fid.write(f"  Diff steps/period: {n_diff}\n")
         fid.write(f"  Pulses:           {n_pulses}\n")
         fid.write(f"  Sim duration:     {sim_dur_v:.4g} {sim_dur_u}\n")
-        fid.write(f"  Time points:      {all_times.size}\n")
+        fid.write(f"  Time points:      {nt_total}\n")
         fid.write(f"  Wall time:        {wall_time:.2f} s\n")
         fid.write("\n--- Results ---\n")
         fid.write(f"  Peak surface Te:  {te_peak_all - 273.15:.1f} degC  (pulse {peak_pulse})\n")
         fid.write(f"  Peak surface Tl:  {tl_peak_all - 273.15:.1f} degC\n")
-        fid.write(f"  Final surface Te: {all_te_surf[-1] - 273.15:.2f} degC\n")
-        fid.write(f"  Final surface Tl: {all_tl_surf[-1] - 273.15:.2f} degC\n")
+        fid.write(f"  Final surface Te: {te_last - 273.15:.2f} degC\n")
+        fid.write(f"  Final surface Tl: {tl_last - 273.15:.2f} degC\n")
         fid.write(f"  Final residual:   {tresid_vals[-1] - 273.15:.2f} degC  (after diffusion)\n")
         if inv_detected:
             fid.write(f"  Inversion onset:  {on_v:.4g} {on_u}\n")
@@ -597,13 +672,17 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         for p in range(n_pulses):
             fid.write(f"  Pulse {p + 1}: Teq={teq_vals[p] - 273.15:.2f} degC, "
                       f"Tresid={tresid_vals[p] - 273.15:.2f} degC\n")
-        fid.write("\n============================================================\n")
-        fid.write("  Surface XY Data: Time (s) | Te_surf (degC) | Tl_surf (degC)\n")
-        fid.write("============================================================\n")
-        fid.write(f"{'Time_s':>20}  {'Te_surf_degC':>16}  {'Tl_surf_degC':>16}\n")
-        fid.writelines(
-            f"{all_times[i]:20.12e}  {all_te_surf[i] - 273.15:16.6f}  "
-            f"{all_tl_surf[i] - 273.15:16.6f}\n" for i in range(all_times.size))
+        if store_history:
+            fid.write("\n============================================================\n")
+            fid.write("  Surface XY Data: Time (s) | Te_surf (degC) | Tl_surf (degC)\n")
+            fid.write("============================================================\n")
+            fid.write(f"{'Time_s':>20}  {'Te_surf_degC':>16}  {'Tl_surf_degC':>16}\n")
+            fid.writelines(
+                f"{all_times[i]:20.12e}  {all_te_surf[i] - 273.15:16.6f}  "
+                f"{all_tl_surf[i] - 273.15:16.6f}\n" for i in range(all_times.size))
+        else:
+            fid.write("\n  storeHistory=False: the per-sample time series was "
+                      "not retained,\n  so no XY table is written.\n")
     print(f"  Output written to: {out_path}\n")
 
     # The radial view is part of the solution, not a figure. Computing it

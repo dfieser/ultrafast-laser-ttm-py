@@ -21,7 +21,7 @@ from datetime import datetime
 import numpy as np
 from scipy.io import savemat
 
-from .config import get_cfg_field
+from .config import get_cfg_field, safe_tag
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
 from .materials import resolve_material
 from .progress import ProgressReporter
@@ -214,6 +214,9 @@ def scanning_beam_solver(params: dict | None = None,
     scan_str = (f"{v_scan:.3g}_mps").replace(".", "p")
     base_name = (f"TTMmov_{freq_str}_{pulse_str}_{power_str}_{spot_str}_"
                  f"{scan_str}_{n_pulses}p")
+    case_tag = safe_tag(get_cfg_field(params, "caseTag", ""))
+    if case_tag:
+        base_name = f"{case_tag}__{base_name}"
 
     out_path = os.path.join(output_dir, base_name + ".txt")
     with open(out_path, "w", encoding="utf-8") as fid:

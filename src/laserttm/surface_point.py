@@ -18,7 +18,7 @@ from datetime import datetime
 
 import numpy as np
 
-from .config import get_cfg_field
+from .config import get_cfg_field, safe_tag
 from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
 from .materials import resolve_material
 from .progress import ProgressReporter
@@ -47,6 +47,17 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     save_figures = get_cfg_field(cfg, "saveFigures", d["saveFigures"])
     if save_figures:
         make_plots = True
+
+    # storeHistory=False drops the per-sample time histories, which grow
+    # without bound (roughly 550 samples per pulse) and feed only the
+    # timeline figures and the report's XY table. Every per-pulse and
+    # summary number is tracked incrementally instead, so the physics and
+    # the reported scalars are unchanged.
+    store_history = bool(get_cfg_field(cfg, "storeHistory", d["storeHistory"]))
+    if not store_history and make_plots:
+        print("  storeHistory=False: time-history figures disabled.")
+        make_plots = False
+        save_figures = False
 
     print("Starting Surface TTM Pulsed Laser Calculator...")
 
@@ -130,6 +141,18 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     tl_now = t0
     tz = t0 * np.ones(nz)
 
+    # Incremental summaries for storeHistory=False. They replicate exactly
+    # what the concatenated arrays would yield: the electron trace is the
+    # fine Te samples followed by the coast surface samples, in pulse order,
+    # with argmax taking the first occurrence.
+    track_te_peak = -np.inf
+    track_tl_peak = -np.inf
+    track_peak_pulse = 1
+    track_peak_time = 0.0
+    track_nt = 0
+    track_t_end = 0.0
+    track_baseline = np.zeros(n_pulses)
+
     tic_all = time.perf_counter()
     progress = ProgressReporter(n_pulses, title="laserttm: surface point",
                                 enabled=show_progress)
@@ -146,9 +169,19 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
             pulse_fine_win, relax_tol, relax_max_t, dt_floor_abs,
         )
         absorbed += absorbed_phase
-        cell_times.append(loc_t)
-        cell_te.append(loc_te)
-        cell_tl.append(loc_tl)
+        if store_history:
+            cell_times.append(loc_t)
+            cell_te.append(loc_te)
+            cell_tl.append(loc_tl)
+        else:
+            i_max = int(np.argmax(loc_te))
+            if loc_te[i_max] > track_te_peak:
+                track_te_peak = float(loc_te[i_max])
+                track_peak_pulse = np_i + 1
+                track_peak_time = float(loc_t[i_max])
+            track_tl_peak = max(track_tl_peak, float(loc_tl.max()))
+            track_nt += loc_t.size
+            track_t_end = float(loc_t[-1])
 
         # Equilibrium temperature (energy-conserving)
         utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
@@ -173,14 +206,29 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
             tz, c_t, c_tl = cn_coast_const(
                 tz, coast_gap, n_diff, alpha_l, dz, t0, t_fine_end, sample_interval
             )
-            cell_coast_t.append(c_t)
-            cell_coast_tl.append(c_tl)
+            if store_history:
+                cell_coast_t.append(c_t)
+                cell_coast_tl.append(c_tl)
+            elif c_tl.size:
+                # The stitched Te trace carries the coast surface samples too.
+                c_imax = int(np.argmax(c_tl))
+                if c_tl[c_imax] > track_te_peak:
+                    track_te_peak = float(c_tl[c_imax])
+                    track_peak_pulse = np_i + 1
+                    track_peak_time = float(c_t[c_imax])
+                track_tl_peak = max(track_tl_peak, float(c_tl[c_imax]))
+                track_nt += c_t.size
+                track_t_end = float(c_t[-1])
+            n_coast_steps = c_t.size
             tresidual = tz[0]
         else:
-            cell_coast_t.append(np.empty(0))
-            cell_coast_tl.append(np.empty(0))
+            if store_history:
+                cell_coast_t.append(np.empty(0))
+                cell_coast_tl.append(np.empty(0))
+            n_coast_steps = 0
             tresidual = teq
 
+        track_baseline[np_i] = track_t_end
         tresid_vals[np_i] = tresidual
         te_now = tresidual
         tl_now = tresidual
@@ -188,62 +236,83 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         if (np_i + 1) % progress_interval == 0 or np_i + 1 == n_pulses:
             print(f"    Pulse {np_i + 1}/{n_pulses}: Te_peak={loc_te.max():.1f} K, "
                   f"Teq={teq:.1f} K, Tresid={tresidual:.1f} K  "
-                  f"({loc_t.size} fine + {cell_coast_t[-1].size} diff steps)")
+                  f"({loc_t.size} fine + {n_coast_steps} diff steps)")
         progress.update(np_i + 1)
 
     progress.close()
     wall_time_s = time.perf_counter() - tic_all
     print(f"  Simulation wall time: {wall_time_s:.2f} s")
 
-    # --- Stitch per-pulse arrays into global vectors (0-based indices) ---
-    times = np.concatenate([
-        arr for pair in zip(cell_times, cell_coast_t) for arr in pair
-    ])
-    te = np.concatenate([
-        arr for pair in zip(cell_te, cell_coast_tl) for arr in pair
-    ])
-    tl = np.concatenate([
-        arr for pair in zip(cell_tl, cell_coast_tl) for arr in pair
-    ])
-    pulse_start_idx = np.zeros(n_pulses, dtype=np.int64)
-    pulse_end_idx = np.zeros(n_pulses, dtype=np.int64)
-    coast_end_idx = np.zeros(n_pulses, dtype=np.int64)
-    ptr = 0
-    for p in range(n_pulses):
-        pulse_start_idx[p] = ptr
-        ptr += cell_times[p].size
-        pulse_end_idx[p] = ptr - 1
-        ptr += cell_coast_t[p].size
-        coast_end_idx[p] = ptr - 1
-    nt = ptr
-    t_end = times[nt - 1]
+    if store_history:
+        # --- Stitch per-pulse arrays into global vectors (0-based indices) ---
+        times = np.concatenate([
+            arr for pair in zip(cell_times, cell_coast_t) for arr in pair
+        ])
+        te = np.concatenate([
+            arr for pair in zip(cell_te, cell_coast_tl) for arr in pair
+        ])
+        tl = np.concatenate([
+            arr for pair in zip(cell_tl, cell_coast_tl) for arr in pair
+        ])
+        pulse_start_idx = np.zeros(n_pulses, dtype=np.int64)
+        pulse_end_idx = np.zeros(n_pulses, dtype=np.int64)
+        coast_end_idx = np.zeros(n_pulses, dtype=np.int64)
+        ptr = 0
+        for p in range(n_pulses):
+            pulse_start_idx[p] = ptr
+            ptr += cell_times[p].size
+            pulse_end_idx[p] = ptr - 1
+            ptr += cell_coast_t[p].size
+            coast_end_idx[p] = ptr - 1
+        nt = ptr
+        t_end = times[nt - 1]
+    else:
+        times = np.empty(0)
+        te = np.empty(0)
+        tl = np.empty(0)
+        nt = track_nt
+        t_end = track_t_end
 
     # ==================  Post-processing  ===================================
     te_c = te - 273.15
     tl_c = tl - 273.15
 
-    idx_te_peak = int(np.argmax(te))
-    te_peak = te[idx_te_peak]
-    tl_peak = tl.max()
-    te_final = te[-1]
-    tl_final = tl[-1]
+    if store_history:
+        idx_te_peak = int(np.argmax(te))
+        te_peak = te[idx_te_peak]
+        tl_peak = tl.max()
+        te_final = te[-1]
+        tl_final = tl[-1]
 
-    peak_pulse0 = int(np.searchsorted(pulse_start_idx, idx_te_peak, side="right") - 1)
-    peak_pulse = peak_pulse0 + 1  # 1-based pulse number, as in the MATLAB contract
-    t_peak_local_val, t_peak_local_unit = smart_time(
-        times[idx_te_peak] - pulse_center_t[peak_pulse0]
-    )
+        peak_pulse0 = int(np.searchsorted(pulse_start_idx, idx_te_peak,
+                                          side="right") - 1)
+        peak_pulse = peak_pulse0 + 1  # 1-based, as in the MATLAB contract
+        t_peak_local_val, t_peak_local_unit = smart_time(
+            times[idx_te_peak] - pulse_center_t[peak_pulse0]
+        )
+    else:
+        te_peak = track_te_peak
+        tl_peak = track_tl_peak
+        te_final = tresid_vals[-1]
+        tl_final = tresid_vals[-1]
+        peak_pulse = track_peak_pulse
+        t_peak_local_val, t_peak_local_unit = smart_time(
+            track_peak_time - pulse_center_t[peak_pulse - 1]
+        )
 
     # ==================  Baseline envelope fit  =============================
     baseline_pulse_nums = np.arange(1, n_pulses + 1, dtype=float)
     baseline_temps = tresid_vals.copy()
 
-    baseline_times_s = np.zeros(n_pulses)
-    for bp in range(n_pulses):
-        if 0 <= coast_end_idx[bp] < nt:
-            baseline_times_s[bp] = times[coast_end_idx[bp]]
-        else:
-            baseline_times_s[bp] = times[pulse_end_idx[bp]]
+    if store_history:
+        baseline_times_s = np.zeros(n_pulses)
+        for bp in range(n_pulses):
+            if 0 <= coast_end_idx[bp] < nt:
+                baseline_times_s[bp] = times[coast_end_idx[bp]]
+            else:
+                baseline_times_s[bp] = times[pulse_end_idx[bp]]
+    else:
+        baseline_times_s = track_baseline
 
     baseline_fit_y = None
     extrap_times_s = None
@@ -347,6 +416,9 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     spot_str = (f"{spot_val:.4g}_{spot_unit}").replace(".", "p")
     out_filename = (f"TTM_{freq_str}_{pulse_str}_{power_str}_{spot_str}_"
                     f"{n_pulses}p_{pulse_profile_name}.txt")
+    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
+    if case_tag:
+        out_filename = f"{case_tag}__{out_filename}"
     out_path = os.path.join(output_dir, out_filename)
 
     leff_val, leff_unit = smart_length(leff)
@@ -399,13 +471,18 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
                       f"Tresid={tresid_vals[p] - 273.15:.2f} deg C\n")
         fid.write("\n")
 
-        fid.write("============================================================\n")
-        fid.write("  XY Data: Time (s) | Te (deg C) | Tl (deg C)\n")
-        fid.write("============================================================\n")
-        fid.write(f"{'Time_s':>20}  {'Te_degC':>16}  {'Tl_degC':>16}\n")
-        fid.writelines(
-            f"{times[i]:20.12e}  {te_c[i]:16.6f}  {tl_c[i]:16.6f}\n" for i in range(nt)
-        )
+        if store_history:
+            fid.write("============================================================\n")
+            fid.write("  XY Data: Time (s) | Te (deg C) | Tl (deg C)\n")
+            fid.write("============================================================\n")
+            fid.write(f"{'Time_s':>20}  {'Te_degC':>16}  {'Tl_degC':>16}\n")
+            fid.writelines(
+                f"{times[i]:20.12e}  {te_c[i]:16.6f}  {tl_c[i]:16.6f}\n"
+                for i in range(nt)
+            )
+        else:
+            fid.write("  storeHistory=False: the per-sample time series was "
+                      "not retained,\n  so no XY table is written.\n")
     print(f"  Output written to: {out_path}")
 
     results = {
