@@ -1,8 +1,8 @@
-"""Radial surface pulsed-laser TTM solver.
+﻿"""Radial surface pulsed-laser TTM solver.
 
-Python port of ``src/Radial_Profile_Solver.m``: 0D electron–lattice dynamics
+Python port of ``src/Radial_Profile_Solver.m``: 0D electronâ€“lattice dynamics
 mapped radially under the Gaussian beam profile, with per-pulse depth
-Crank–Nicolson cooling and cylindrical-coordinate radial diffusion, both with
+Crankâ€“Nicolson cooling and cylindrical-coordinate radial diffusion, both with
 temperature-dependent k(T).
 
 Two modes, as in MATLAB (``radialSolveMode``): ``'scale'`` (default) solves
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 import numpy as np
@@ -63,6 +64,307 @@ def _early_stop_hit(t_surf_k: np.ndarray, r_grid: np.ndarray, t_melt_c: float,
               f"{cur_melt_r:.2f} um >= target {target_um:.2f} um")
         return True
     return False
+
+
+@dataclass(frozen=True)
+class _Setup:
+    """Everything the pulse loop needs, resolved once before it starts.
+
+    The two solve modes are genuinely different algorithms, so each gets its
+    own function below; this record is what they share.
+    """
+
+    # Material and derived diffusion
+    gamma: float
+    cl: float
+    g_ep: float
+    k_tab_t: np.ndarray
+    k_tab_k: np.ndarray
+    alpha_l: float
+    # Pulse train
+    eabs_vol: float
+    tau_fwhm: float
+    trep: float
+    sim_duration: float
+    n_pulses: int
+    pulse_offset: float
+    prof_code: int
+    # Grids
+    t0: float
+    nz: int
+    dz: float
+    nr: int
+    r_grid: np.ndarray
+    dr: float
+    fluence_ratio: np.ndarray
+    # Depth deposit shape (loop invariant)
+    depth_is_exp: bool
+    exp_decay_z: np.ndarray
+    box_mask_z: np.ndarray
+    # Time stepping
+    f_target: float
+    n_diff: int
+    n_diff_rad: int
+    dt_floor_abs: float
+    pulse_fine_win: float
+    relax_tol: float
+    relax_max_t: float
+    # Run controls
+    store_history: bool
+    progress_interval: int
+    early_stop_enabled: bool
+    early_stop_check_interval: int
+    early_stop_t_melt_c: float
+    early_stop_melt_radius_um: float
+
+
+@dataclass
+class _State:
+    """Per-pulse results accumulated by whichever solve mode ran."""
+
+    teq_vals: np.ndarray
+    tresid_vals: np.ndarray
+    tresid_radial: np.ndarray
+    cell_times: list
+    cell_tl: list
+    cell_coast_t: list
+    cell_coast_tl: list
+    n_pulses_run: int
+
+    @classmethod
+    def empty(cls, n_pulses: int, nr: int) -> _State:
+        return cls(teq_vals=np.zeros(n_pulses),
+                   tresid_vals=np.zeros(n_pulses),
+                   tresid_radial=np.zeros((n_pulses, nr)),
+                   cell_times=[], cell_tl=[],
+                   cell_coast_t=[], cell_coast_tl=[],
+                   n_pulses_run=n_pulses)
+
+
+def _solve_scale(s: _Setup, st: _State, progress: ProgressReporter) -> None:
+    """One 0D TTM at beam centre, scaled radially by the Gaussian fluence.
+
+    The centre-point rise is applied across the radial array in proportion to
+    the local fluence, then a single survival factor carries the depth cooling
+    outward. Cheap and accurate while Ce(Te) stays near-linear over the
+    fluence range.
+    """
+    t0, gamma, cl, g_ep = s.t0, s.gamma, s.cl, s.g_ep
+    k_tab_t, k_tab_k, alpha_l, f_target = s.k_tab_t, s.k_tab_k, s.alpha_l, s.f_target
+    n_pulses, trep, tau_fwhm, dz, dr = s.n_pulses, s.trep, s.tau_fwhm, s.dz, s.dr
+    pulse_offset, store_history = s.pulse_offset, s.store_history
+
+    te_now = t0
+    tl_now = t0
+    tz = t0 * np.ones(s.nz)
+    tr_surf = t0 * np.ones(s.nr)
+
+    for np_i in range(n_pulses):
+        t_pulse = pulse_offset + np_i * trep
+        t_start = t_pulse - 5.0 * tau_fwhm
+
+        # --- Phase 1: RK4 around the pulse (beam centre, full fluence) ---
+        loc_t, loc_te, loc_tl, _ = rk4_pulse_phase(
+            t_pulse, t_start, te_now, tl_now,
+            gamma, g_ep, cl,
+            n_pulses, trep, pulse_offset, s.prof_code, tau_fwhm, s.eabs_vol,
+            s.pulse_fine_win, s.relax_tol, s.relax_max_t, s.dt_floor_abs,
+        )
+        if store_history:
+            st.cell_times.append(loc_t)
+            st.cell_tl.append(loc_tl)
+
+        utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
+        teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
+        st.teq_vals[np_i] = teq
+
+        # Deposit pulse heat into the radial surface array
+        dt_pulse = teq - te_now
+        tr_surf = tr_surf + dt_pulse * s.fluence_ratio
+
+        # --- Phase 2: depth CN cooling + radial CN diffusion ---
+        t_fine_end = loc_t[-1]
+        if np_i < n_pulses - 1:
+            t_next_start = pulse_offset + (np_i + 1) * trep - 5.0 * tau_fwhm
+        else:
+            t_next_start = s.sim_duration
+        coast_gap = t_next_start - t_fine_end
+
+        if coast_gap > 0:
+            if s.depth_is_exp:
+                tz = tz + (teq - tz[0]) * s.exp_decay_z
+            else:  # 'box' and the MATLAB otherwise-branch
+                tz[s.box_mask_z] = teq
+
+            n_diff_local = max(s.n_diff, int(np.ceil(
+                alpha_l * coast_gap / (f_target * dz**2))))
+            n_sample = min(n_diff_local, 50)
+            sample_int = max(1, n_diff_local // n_sample)
+            tz, c_t, c_tl = cn_coast_kt(
+                tz, coast_gap, n_diff_local, dz, t0, cl,
+                k_tab_t, k_tab_k, t_fine_end, sample_int)
+            if store_history:
+                st.cell_coast_t.append(c_t)
+                st.cell_coast_tl.append(c_tl)
+            tresidual = tz[0]
+
+            # Apply depth cooling to the radial surface array
+            if (teq - t0) > 1e-10:
+                survival = (tresidual - t0) / (teq - t0)
+            else:
+                survival = 1.0
+            tr_surf = t0 + (tr_surf - t0) * survival
+
+            # Radial CN diffusion (cylindrical coordinates)
+            n_rad_steps = max(s.n_diff_rad, int(np.ceil(
+                alpha_l * coast_gap / (f_target * dr**2))))
+            dt_rad = coast_gap / n_rad_steps
+            tr_surf = radial_coast_kt(
+                tr_surf, n_rad_steps, dt_rad, dr, t0, cl, k_tab_t, k_tab_k)
+        elif store_history:
+            st.cell_coast_t.append(np.empty(0))
+            st.cell_coast_tl.append(np.empty(0))
+
+        st.tresid_vals[np_i] = tr_surf[0]
+        st.tresid_radial[np_i, :] = tr_surf
+        te_now = tr_surf[0]
+        tl_now = tr_surf[0]
+
+        if (np_i + 1) % s.progress_interval == 0 or np_i + 1 == n_pulses:
+            print(f"    Pulse {np_i + 1}/{n_pulses}: "
+                  f"Teq={teq - 273.15:.1f} C, Tresid={tr_surf[0] - 273.15:.1f} C")
+        progress.update(np_i + 1)
+
+        # --- Early stop check ---
+        if (s.early_stop_enabled
+                and (np_i + 1) % s.early_stop_check_interval == 0
+                and _early_stop_hit(tr_surf, s.r_grid, s.early_stop_t_melt_c,
+                                    s.early_stop_melt_radius_um, np_i + 1)):
+            st.n_pulses_run = np_i + 1
+            break
+
+
+def _solve_independent(s: _Setup, st: _State, progress: ProgressReporter) -> None:
+    """An independent 0D TTM at every radial node, pulse-major.
+
+    Each node sees its own local fluence, so the nonlinear Ce(Te) response is
+    captured per node rather than scaled from the centre. Costs one RK4 solve
+    per node per pulse, and adds a depth-profile rescale after radial
+    diffusion that the scaled mode does not need.
+    """
+    t0, gamma, cl, g_ep = s.t0, s.gamma, s.cl, s.g_ep
+    k_tab_t, k_tab_k, alpha_l, f_target = s.k_tab_t, s.k_tab_k, s.alpha_l, s.f_target
+    n_pulses, trep, tau_fwhm, dz, dr = s.n_pulses, s.trep, s.tau_fwhm, s.dz, s.dr
+    pulse_offset, store_history, nr = s.pulse_offset, s.store_history, s.nr
+
+    te_all = t0 * np.ones(nr)
+    tl_all = t0 * np.ones(nr)
+    tz_all = t0 * np.ones((s.nz, nr))
+    eabs_vol_all = s.eabs_vol * s.fluence_ratio
+    active = s.fluence_ratio >= 1e-12
+
+    for np_i in range(n_pulses):
+        t_pulse = pulse_offset + np_i * trep
+        t_start = t_pulse - 5.0 * tau_fwhm
+        t_fine_end_center = t_start
+
+        # --- Phase 1: RK4 TTM at each radial node ---
+        for ri in range(nr):
+            if not active[ri]:
+                continue
+
+            loc_t, loc_te, loc_tl, _ = rk4_pulse_phase(
+                t_pulse, t_start, te_all[ri], tl_all[ri],
+                gamma, g_ep, cl,
+                n_pulses, trep, pulse_offset, s.prof_code, tau_fwhm,
+                eabs_vol_all[ri],
+                s.pulse_fine_win, s.relax_tol, s.relax_max_t, s.dt_floor_abs,
+            )
+            if ri == 0:
+                if store_history:
+                    st.cell_times.append(loc_t)
+                    st.cell_tl.append(loc_tl)
+                t_fine_end_center = loc_t[-1]
+
+            utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
+            teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
+            if ri == 0:
+                st.teq_vals[np_i] = teq
+
+            # Deposit pulse energy into this node's depth profile
+            if s.depth_is_exp:
+                tz_all[:, ri] = tz_all[:, ri] \
+                    + (teq - tz_all[0, ri]) * s.exp_decay_z
+            else:
+                tz_all[s.box_mask_z, ri] = teq
+            te_all[ri] = teq
+            tl_all[ri] = teq
+
+        # --- Phase 2: depth CN diffusion at each node ---
+        if np_i < n_pulses - 1:
+            t_next_start = pulse_offset + (np_i + 1) * trep - 5.0 * tau_fwhm
+        else:
+            t_next_start = s.sim_duration
+        coast_gap = t_next_start - t_fine_end_center
+
+        if coast_gap > 0:
+            n_diff_local = max(s.n_diff, int(np.ceil(
+                alpha_l * coast_gap / (f_target * dz**2))))
+            dt_diff = coast_gap / n_diff_local
+            n_sample = min(n_diff_local, 50)
+            sample_int = max(1, n_diff_local // n_sample)
+
+            c_t, c_tl = cn_depth_multi_kt(
+                tz_all, active, n_diff_local, dt_diff, dz, t0, cl,
+                k_tab_t, k_tab_k, t_fine_end_center, sample_int)
+            if store_history:
+                st.cell_coast_t.append(c_t)
+                st.cell_coast_tl.append(c_tl)
+            te_all[active] = tz_all[0, active]
+            tl_all[active] = tz_all[0, active]
+
+            # --- Phase 3: radial CN diffusion ---
+            tr_pre = te_all.copy()
+            n_rad_steps = max(s.n_diff_rad, int(np.ceil(
+                alpha_l * coast_gap / (f_target * dr**2))))
+            dt_rad = coast_gap / n_rad_steps
+            tr_surf = radial_coast_kt(
+                te_all, n_rad_steps, dt_rad, dr, t0, cl, k_tab_t, k_tab_k)
+
+            # Adjust depth profiles to match post-radial surface temps
+            for ri in range(nr):
+                dt_pre = tr_pre[ri] - t0
+                if dt_pre > 1e-10:
+                    survival = max((tr_surf[ri] - t0) / dt_pre, 0.0)
+                    tz_all[:, ri] = t0 + (tz_all[:, ri] - t0) * survival
+                elif tr_surf[ri] > t0 + 1e-10:
+                    # Heat arrived via radial diffusion into a cold node
+                    tz_all[0, ri] = tr_surf[ri]
+            te_all = tr_surf.copy()
+            tl_all = tr_surf.copy()
+        elif store_history:
+            st.cell_coast_t.append(np.empty(0))
+            st.cell_coast_tl.append(np.empty(0))
+
+        st.tresid_radial[np_i, :] = te_all
+        st.tresid_vals[np_i] = te_all[0]
+
+        if (np_i + 1) % s.progress_interval == 0 or np_i + 1 == n_pulses:
+            print(f"    Pulse {np_i + 1}/{n_pulses}: "
+                  f"Teq={st.teq_vals[np_i] - 273.15:.1f} C, "
+                  f"Tresid={te_all[0] - 273.15:.1f} C")
+        progress.update(np_i + 1)
+
+        # --- Early stop check ---
+        if (s.early_stop_enabled
+                and (np_i + 1) % s.early_stop_check_interval == 0
+                and _early_stop_hit(te_all, s.r_grid, s.early_stop_t_melt_c,
+                                    s.early_stop_melt_radius_um, np_i + 1)):
+            st.n_pulses_run = np_i + 1
+            break
+
+
+_SOLVE_MODES = {"scale": _solve_scale, "independent": _solve_independent}
 
 
 def radial_profile_solver(cfg: dict | None = None) -> dict:
@@ -180,14 +482,6 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     exp_decay_z = np.exp(-z_grid / leff)
     box_mask_z = z_grid <= leff
 
-    cell_times: list[np.ndarray] = []
-    cell_tl: list[np.ndarray] = []
-    cell_coast_t: list[np.ndarray] = []
-    cell_coast_tl: list[np.ndarray] = []
-    teq_vals = np.zeros(n_pulses)
-    tresid_vals = np.zeros(n_pulses)
-    tresid_radial = np.zeros((n_pulses, nr))
-
     n_profile_snaps = min(n_pulses, 12)
     if n_pulses > 1:
         profile_snap_pulses = np.unique(np.round(
@@ -197,210 +491,44 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
 
     progress_interval = max(1, n_pulses // 20)
     tic_all = time.perf_counter()
-    n_pulses_run = n_pulses
     progress = ProgressReporter(n_pulses, title="laserttm: radial profile",
                                 enabled=show_progress)
 
+    setup = _Setup(
+        gamma=gamma, cl=cl, g_ep=g_ep, k_tab_t=k_tab_t, k_tab_k=k_tab_k,
+        alpha_l=alpha_l,
+        eabs_vol=eabs_vol, tau_fwhm=tau_fwhm, trep=trep,
+        sim_duration=sim_duration, n_pulses=n_pulses,
+        pulse_offset=pulse_offset, prof_code=prof_code,
+        t0=t0, nz=nz, dz=dz, nr=nr, r_grid=r_grid, dr=dr,
+        fluence_ratio=fluence_ratio,
+        depth_is_exp=depth_is_exp, exp_decay_z=exp_decay_z,
+        box_mask_z=box_mask_z,
+        f_target=f_target, n_diff=n_diff, n_diff_rad=n_diff_rad,
+        dt_floor_abs=dt_floor_abs, pulse_fine_win=pulse_fine_win,
+        relax_tol=relax_tol, relax_max_t=relax_max_t,
+        store_history=store_history, progress_interval=progress_interval,
+        early_stop_enabled=early_stop_enabled,
+        early_stop_check_interval=early_stop_check_interval,
+        early_stop_t_melt_c=early_stop_t_melt_c,
+        early_stop_melt_radius_um=early_stop_melt_radius_um,
+    )
+    state = _State.empty(n_pulses, nr)
+
     if radial_solve_mode == "scale":
         print("  Running single center-point simulation...")
-
-        te_now = t0
-        tl_now = t0
-        tz = t0 * np.ones(nz)
-        tr_surf = t0 * np.ones(nr)
-
-        for np_i in range(n_pulses):
-            t_pulse = pulse_offset + np_i * trep
-            t_start = t_pulse - 5.0 * tau_fwhm
-
-            # --- Phase 1: RK4 around the pulse (beam centre, full fluence) ---
-            loc_t, loc_te, loc_tl, _ = rk4_pulse_phase(
-                t_pulse, t_start, te_now, tl_now,
-                gamma, g_ep, cl,
-                n_pulses, trep, pulse_offset, prof_code, tau_fwhm, eabs_vol,
-                pulse_fine_win, relax_tol, relax_max_t, dt_floor_abs,
-            )
-            if store_history:
-                cell_times.append(loc_t)
-                cell_tl.append(loc_tl)
-
-            utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
-            teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
-            teq_vals[np_i] = teq
-
-            # Deposit pulse heat into the radial surface array
-            dt_pulse = teq - te_now
-            tr_surf = tr_surf + dt_pulse * fluence_ratio
-
-            # --- Phase 2: depth CN cooling + radial CN diffusion ---
-            t_fine_end = loc_t[-1]
-            if np_i < n_pulses - 1:
-                t_next_start = pulse_offset + (np_i + 1) * trep - 5.0 * tau_fwhm
-            else:
-                t_next_start = sim_duration
-            coast_gap = t_next_start - t_fine_end
-
-            if coast_gap > 0:
-                if depth_is_exp:
-                    tz = tz + (teq - tz[0]) * exp_decay_z
-                else:  # 'box' and the MATLAB otherwise-branch
-                    tz[box_mask_z] = teq
-
-                n_diff_local = max(n_diff, int(np.ceil(
-                    alpha_l * coast_gap / (f_target * dz**2))))
-                n_sample = min(n_diff_local, 50)
-                sample_int = max(1, n_diff_local // n_sample)
-                tz, c_t, c_tl = cn_coast_kt(
-                    tz, coast_gap, n_diff_local, dz, t0, cl,
-                    k_tab_t, k_tab_k, t_fine_end, sample_int)
-                if store_history:
-                    cell_coast_t.append(c_t)
-                    cell_coast_tl.append(c_tl)
-                tresidual = tz[0]
-
-                # Apply depth cooling to the radial surface array
-                if (teq - t0) > 1e-10:
-                    survival = (tresidual - t0) / (teq - t0)
-                else:
-                    survival = 1.0
-                tr_surf = t0 + (tr_surf - t0) * survival
-
-                # Radial CN diffusion (cylindrical coordinates)
-                n_rad_steps = max(n_diff_rad, int(np.ceil(
-                    alpha_l * coast_gap / (f_target * dr**2))))
-                dt_rad = coast_gap / n_rad_steps
-                tr_surf = radial_coast_kt(
-                    tr_surf, n_rad_steps, dt_rad, dr, t0, cl, k_tab_t, k_tab_k)
-            elif store_history:
-                cell_coast_t.append(np.empty(0))
-                cell_coast_tl.append(np.empty(0))
-
-            tresid_vals[np_i] = tr_surf[0]
-            tresid_radial[np_i, :] = tr_surf
-            te_now = tr_surf[0]
-            tl_now = tr_surf[0]
-
-            if (np_i + 1) % progress_interval == 0 or np_i + 1 == n_pulses:
-                print(f"    Pulse {np_i + 1}/{n_pulses}: "
-                      f"Teq={teq - 273.15:.1f} C, Tresid={tr_surf[0] - 273.15:.1f} C")
-            progress.update(np_i + 1)
-
-            # --- Early stop check ---
-            if (early_stop_enabled
-                    and (np_i + 1) % early_stop_check_interval == 0
-                    and _early_stop_hit(tr_surf, r_grid, early_stop_t_melt_c,
-                                        early_stop_melt_radius_um, np_i + 1)):
-                n_pulses_run = np_i + 1
-                break
-
     else:
         print(f"  Running independent 0D solves at {nr} radial nodes (pulse-major)...")
+    _SOLVE_MODES[radial_solve_mode](setup, state, progress)
 
-        te_all = t0 * np.ones(nr)
-        tl_all = t0 * np.ones(nr)
-        tz_all = t0 * np.ones((nz, nr))
-        eabs_vol_all = eabs_vol * fluence_ratio
-        active = fluence_ratio >= 1e-12
-
-        for np_i in range(n_pulses):
-            t_pulse = pulse_offset + np_i * trep
-            t_start = t_pulse - 5.0 * tau_fwhm
-            t_fine_end_center = t_start
-
-            # --- Phase 1: RK4 TTM at each radial node ---
-            for ri in range(nr):
-                if not active[ri]:
-                    continue
-
-                loc_t, loc_te, loc_tl, _ = rk4_pulse_phase(
-                    t_pulse, t_start, te_all[ri], tl_all[ri],
-                    gamma, g_ep, cl,
-                    n_pulses, trep, pulse_offset, prof_code, tau_fwhm,
-                    eabs_vol_all[ri],
-                    pulse_fine_win, relax_tol, relax_max_t, dt_floor_abs,
-                )
-                if ri == 0:
-                    if store_history:
-                        cell_times.append(loc_t)
-                        cell_tl.append(loc_tl)
-                    t_fine_end_center = loc_t[-1]
-
-                utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
-                teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
-                if ri == 0:
-                    teq_vals[np_i] = teq
-
-                # Deposit pulse energy into this node's depth profile
-                if depth_is_exp:
-                    tz_all[:, ri] = tz_all[:, ri] \
-                        + (teq - tz_all[0, ri]) * exp_decay_z
-                else:
-                    tz_all[box_mask_z, ri] = teq
-                te_all[ri] = teq
-                tl_all[ri] = teq
-
-            # --- Phase 2: depth CN diffusion at each node ---
-            if np_i < n_pulses - 1:
-                t_next_start = pulse_offset + (np_i + 1) * trep - 5.0 * tau_fwhm
-            else:
-                t_next_start = sim_duration
-            coast_gap = t_next_start - t_fine_end_center
-
-            if coast_gap > 0:
-                n_diff_local = max(n_diff, int(np.ceil(
-                    alpha_l * coast_gap / (f_target * dz**2))))
-                dt_diff = coast_gap / n_diff_local
-                n_sample = min(n_diff_local, 50)
-                sample_int = max(1, n_diff_local // n_sample)
-
-                c_t, c_tl = cn_depth_multi_kt(
-                    tz_all, active, n_diff_local, dt_diff, dz, t0, cl,
-                    k_tab_t, k_tab_k, t_fine_end_center, sample_int)
-                if store_history:
-                    cell_coast_t.append(c_t)
-                    cell_coast_tl.append(c_tl)
-                te_all[active] = tz_all[0, active]
-                tl_all[active] = tz_all[0, active]
-
-                # --- Phase 3: radial CN diffusion ---
-                tr_pre = te_all.copy()
-                n_rad_steps = max(n_diff_rad, int(np.ceil(
-                    alpha_l * coast_gap / (f_target * dr**2))))
-                dt_rad = coast_gap / n_rad_steps
-                tr_surf = radial_coast_kt(
-                    te_all, n_rad_steps, dt_rad, dr, t0, cl, k_tab_t, k_tab_k)
-
-                # Adjust depth profiles to match post-radial surface temps
-                for ri in range(nr):
-                    dt_pre = tr_pre[ri] - t0
-                    if dt_pre > 1e-10:
-                        survival = max((tr_surf[ri] - t0) / dt_pre, 0.0)
-                        tz_all[:, ri] = t0 + (tz_all[:, ri] - t0) * survival
-                    elif tr_surf[ri] > t0 + 1e-10:
-                        # Heat arrived via radial diffusion into a cold node
-                        tz_all[0, ri] = tr_surf[ri]
-                te_all = tr_surf.copy()
-                tl_all = tr_surf.copy()
-            elif store_history:
-                cell_coast_t.append(np.empty(0))
-                cell_coast_tl.append(np.empty(0))
-
-            tresid_radial[np_i, :] = te_all
-            tresid_vals[np_i] = te_all[0]
-
-            if (np_i + 1) % progress_interval == 0 or np_i + 1 == n_pulses:
-                print(f"    Pulse {np_i + 1}/{n_pulses}: "
-                      f"Teq={teq_vals[np_i] - 273.15:.1f} C, "
-                      f"Tresid={te_all[0] - 273.15:.1f} C")
-            progress.update(np_i + 1)
-
-            # --- Early stop check ---
-            if (early_stop_enabled
-                    and (np_i + 1) % early_stop_check_interval == 0
-                    and _early_stop_hit(te_all, r_grid, early_stop_t_melt_c,
-                                        early_stop_melt_radius_um, np_i + 1)):
-                n_pulses_run = np_i + 1
-                break
+    teq_vals = state.teq_vals
+    tresid_vals = state.tresid_vals
+    tresid_radial = state.tresid_radial
+    cell_times = state.cell_times
+    cell_tl = state.cell_tl
+    cell_coast_t = state.cell_coast_t
+    cell_coast_tl = state.cell_coast_tl
+    n_pulses_run = state.n_pulses_run
 
     # ==================  Shared epilogue (both modes)  ======================
     n_pulses = n_pulses_run
@@ -441,7 +569,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     sim_dur_v, sim_dur_u = smart_time(sim_duration)
 
     print("\n============================================================")
-    print("  Radial Surface TTM Calculator — Results")
+    print("  Radial Surface TTM Calculator â€” Results")
     print("============================================================")
     print(f"  Material:              {str(material).upper()}")
     print(f"  Mode:                  {radial_solve_mode}")
@@ -486,7 +614,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     final_radial_t = tresid_radial[-1, :]
     with open(out_path, "w") as fid:
         fid.write("============================================================\n")
-        fid.write("  Radial Surface TTM Calculator — Output\n")
+        fid.write("  Radial Surface TTM Calculator â€” Output\n")
         # Local wall-clock on purpose, matching the MATLAB reference output
         fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
         fid.write(f"  Mode: {radial_solve_mode}\n")
@@ -515,9 +643,9 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
             fid.write(f"  Pulse {p + 1}: Teq={teq_vals[p] - 273.15:.2f} C, "
                       f"Tresid={tresid_vals[p] - 273.15:.2f} C\n")
         fid.write("\n--- Final Radial Profile (r [um] | T [C]) ---\n")
-        for ri in range(nr):
-            fid.write(f"  r = {r_grid[ri] * 1e6:8.2f} um :  "
-                      f"T = {final_radial_t[ri] - 273.15:.2f} C\n")
+        fid.writelines(f"  r = {r_grid[ri] * 1e6:8.2f} um :  "
+                       f"T = {final_radial_t[ri] - 273.15:.2f} C\n"
+                       for ri in range(nr))
     print(f"  Output written to: {out_path}\n")
 
     # ==================  Plots  =============================================
