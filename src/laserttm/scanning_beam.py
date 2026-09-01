@@ -25,33 +25,14 @@ from .config import get_cfg_field
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
 from .materials import resolve_material
 from .progress import ProgressReporter
+from .schema import defaults as schema_defaults
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
-_DEFAULTS = {
-    "material": "W",
-    "gamma": 137.3,
-    "Cl": 2.54e6,
-    "G": 1.65e17,
-    "kl": 174.0,
-    "Pavg": 40.0,
-    "spotRadius": 100e-6,
-    "f_rep": 18e6,
-    "tau_FWHM": 100e-15,
-    "pulseProfile": "gaussian",
-    "v_scan": 1.0,
-    "scanLength": 2e-3,
-    "absorbance": 0.55,
-    "Leff": 100e-9,
-    "T0_C": 25.0,
-    "Nx": 120,
-    "Ny": 60,
-    "xPad": 3,
-    "yExtent": 5,
-    "depthProfile": "exponential",
-    "dzTarget": 500e-9,
-    "Ndiff": 100,
-    "NadiPerGap": 10,
-}
+# Defaults come from the schema, which is the single place they are declared
+# for every solver. The material property keys are dropped: they are
+# overrides resolved by materials.resolve_material, not solver defaults.
+_DEFAULTS = {k: v for k, v in schema_defaults("scanning_beam").items()
+             if v is not None}
 
 def _matlab_round(x: float) -> int:
     return int(np.floor(x + 0.5))

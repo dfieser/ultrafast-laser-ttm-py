@@ -33,6 +33,7 @@ from .kernels import (
 )
 from .materials import k_model_name, k_table, resolve_material
 from .progress import ProgressReporter
+from .schema import defaults as schema_defaults
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 200e-12)
@@ -53,43 +54,48 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     if cfg is None:
         cfg = {}
 
-    make_plots = get_cfg_field(cfg, "makePlots", True)
-    save_figures = get_cfg_field(cfg, "saveFigures", False)
+    # Defaults come from the schema so there is one place to read them and
+    # one place they can change. See schema.describe_solver('depth_profile').
+    d = schema_defaults("depth_profile")
+
+    make_plots = get_cfg_field(cfg, "makePlots", d["makePlots"])
+    save_figures = get_cfg_field(cfg, "saveFigures", d["saveFigures"])
     if save_figures:
         make_plots = True
 
     print("=== 1D Two-Temperature Model Pulsed Laser Calculator ===")
 
     # ========================  USER INPUTS  =================================
-    material = get_cfg_field(cfg, "material", "W")
+    material = get_cfg_field(cfg, "material", d["material"])
 
-    pavg = get_cfg_field(cfg, "Pavg", 40.0)
-    spot_radius = get_cfg_field(cfg, "spotRadius", 100e-6)
-    f_rep = get_cfg_field(cfg, "f_rep", 18e6)
-    tau_fwhm = get_cfg_field(cfg, "tau_FWHM", 100e-15)
-    pulse_profile_name = get_cfg_field(cfg, "pulseProfile", "gaussian")
+    pavg = get_cfg_field(cfg, "Pavg", d["Pavg"])
+    spot_radius = get_cfg_field(cfg, "spotRadius", d["spotRadius"])
+    f_rep = get_cfg_field(cfg, "f_rep", d["f_rep"])
+    tau_fwhm = get_cfg_field(cfg, "tau_FWHM", d["tau_FWHM"])
+    pulse_profile_name = get_cfg_field(cfg, "pulseProfile", d["pulseProfile"])
 
-    absorbance = get_cfg_field(cfg, "absorbance", 0.55)
-    t0_c = get_cfg_field(cfg, "T0_C", 25.0)
+    absorbance = get_cfg_field(cfg, "absorbance", d["absorbance"])
+    t0_c = get_cfg_field(cfg, "T0_C", d["T0_C"])
 
-    lz = get_cfg_field(cfg, "Lz", 1000e-9)
-    nz = int(get_cfg_field(cfg, "Nz", 200))
+    lz = get_cfg_field(cfg, "Lz", d["Lz"])
+    nz = int(get_cfg_field(cfg, "Nz", d["Nz"]))
 
-    sim_duration = get_cfg_field(cfg, "simDuration", 100e-6)
+    sim_duration = get_cfg_field(cfg, "simDuration", d["simDuration"])
     snapshot_delays = np.asarray(
-        get_cfg_field(cfg, "snapshotDelays", _DEFAULT_SNAPSHOT_DELAYS), dtype=float
+        get_cfg_field(cfg, "snapshotDelays", d["snapshotDelays"]), dtype=float
     )
 
-    enable_radial = get_cfg_field(cfg, "enableRadialProfile", True)
-    nr_radial = int(get_cfg_field(cfg, "Nr_radial", 20))
-    r_max_factor = get_cfg_field(cfg, "rMax_factor", 3)
-    dz_target_diff = get_cfg_field(cfg, "dzTarget_diff", 500e-9)
-    n_diff = int(get_cfg_field(cfg, "Ndiff", 100))
+    enable_radial = get_cfg_field(cfg, "enableRadialProfile",
+                                  d["enableRadialProfile"])
+    nr_radial = int(get_cfg_field(cfg, "Nr_radial", d["Nr_radial"]))
+    r_max_factor = get_cfg_field(cfg, "rMax_factor", d["rMax_factor"])
+    dz_target_diff = get_cfg_field(cfg, "dzTarget_diff", d["dzTarget_diff"])
+    n_diff = int(get_cfg_field(cfg, "Ndiff", d["Ndiff"]))
 
-    rel_tol = get_cfg_field(cfg, "relTol", 1e-6)
-    abs_tol = get_cfg_field(cfg, "absTol", 1e-1)
+    rel_tol = get_cfg_field(cfg, "relTol", d["relTol"])
+    abs_tol = get_cfg_field(cfg, "absTol", d["absTol"])
 
-    show_progress = get_cfg_field(cfg, "showProgress", None)
+    show_progress = get_cfg_field(cfg, "showProgress", d["showProgress"])
 
     # ==================  Material properties  ===============================
     mat = resolve_material(cfg, needs_optical=True)

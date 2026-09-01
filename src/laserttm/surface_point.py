@@ -22,6 +22,7 @@ from .config import get_cfg_field
 from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
 from .materials import resolve_material
 from .progress import ProgressReporter
+from .schema import defaults as schema_defaults
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
@@ -37,32 +38,36 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     if cfg is None:
         cfg = {}
 
-    make_plots = get_cfg_field(cfg, "makePlots", True)
-    save_figures = get_cfg_field(cfg, "saveFigures", False)
+    # Defaults come from the schema so there is one place to read them and
+    # one place they can change. See schema.describe_solver('surface_point').
+    d = schema_defaults("surface_point")
+
+    make_plots = get_cfg_field(cfg, "makePlots", d["makePlots"])
+    save_figures = get_cfg_field(cfg, "saveFigures", d["saveFigures"])
     if save_figures:
         make_plots = True
 
     print("Starting Surface TTM Pulsed Laser Calculator...")
 
     # ========================  USER INPUTS  =================================
-    material = get_cfg_field(cfg, "material", "W")
+    material = get_cfg_field(cfg, "material", d["material"])
 
-    pavg = get_cfg_field(cfg, "Pavg", 1.0)                 # Average power [W]
-    spot_radius = get_cfg_field(cfg, "spotRadius", 80e-6)  # Spot radius [m]
+    pavg = get_cfg_field(cfg, "Pavg", d["Pavg"])
+    spot_radius = get_cfg_field(cfg, "spotRadius", d["spotRadius"])
 
-    absorbance = get_cfg_field(cfg, "absorbance", 0.55)    # Absorbance A (0..1)
-    leff = get_cfg_field(cfg, "Leff", 100e-9)              # Effective heated thickness [m]
-    t0_c = get_cfg_field(cfg, "T0_C", 25.0)                # Initial temperature [deg C]
+    absorbance = get_cfg_field(cfg, "absorbance", d["absorbance"])
+    leff = get_cfg_field(cfg, "Leff", d["Leff"])
+    t0_c = get_cfg_field(cfg, "T0_C", d["T0_C"])
 
-    pulse_profile_name = get_cfg_field(cfg, "pulseProfile", "gaussian")
-    tau_fwhm = get_cfg_field(cfg, "tau_FWHM", 500e-15)     # Pulse width FWHM [s]
-    f_rep = get_cfg_field(cfg, "f_rep", 1e6)               # Repetition rate [Hz]
-    sim_duration = get_cfg_field(cfg, "simDuration", 100e-6)
+    pulse_profile_name = get_cfg_field(cfg, "pulseProfile", d["pulseProfile"])
+    tau_fwhm = get_cfg_field(cfg, "tau_FWHM", d["tau_FWHM"])
+    f_rep = get_cfg_field(cfg, "f_rep", d["f_rep"])
+    sim_duration = get_cfg_field(cfg, "simDuration", d["simDuration"])
 
-    depth_profile = get_cfg_field(cfg, "depthProfile", "exponential")  # 'box'|'exponential'
-    dz_target = get_cfg_field(cfg, "dzTarget", 500e-9)     # Depth grid spacing [m]
-    n_diff = int(get_cfg_field(cfg, "Ndiff", 100))         # CN steps per inter-pulse period
-    show_progress = get_cfg_field(cfg, "showProgress", None)  # waitbar popup
+    depth_profile = get_cfg_field(cfg, "depthProfile", d["depthProfile"])
+    dz_target = get_cfg_field(cfg, "dzTarget", d["dzTarget"])
+    n_diff = int(get_cfg_field(cfg, "Ndiff", d["Ndiff"]))
+    show_progress = get_cfg_field(cfg, "showProgress", d["showProgress"])
 
     # ==================  Material properties  ===============================
     mat = resolve_material(cfg, needs_optical=False)

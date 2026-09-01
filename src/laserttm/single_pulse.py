@@ -23,6 +23,7 @@ from scipy.sparse import bmat, diags
 from .config import get_cfg_field
 from .kernels import profile_code, ttm_1d_rhs
 from .materials import k_table, resolve_material
+from .schema import defaults as schema_defaults
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 200e-12)
@@ -35,34 +36,38 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
     if cfg is None:
         cfg = {}
 
-    make_plots = get_cfg_field(cfg, "makePlots", True)
-    save_figures = get_cfg_field(cfg, "saveFigures", False)
+    # Defaults come from the schema so there is one place to read them and
+    # one place they can change. See schema.describe_solver('single_pulse').
+    d = schema_defaults("single_pulse")
+
+    make_plots = get_cfg_field(cfg, "makePlots", d["makePlots"])
+    save_figures = get_cfg_field(cfg, "saveFigures", d["saveFigures"])
     if save_figures:
         make_plots = True
 
     print("=== 1D Two-Temperature Model — Single Pulse Visualizer ===")
 
-    material = get_cfg_field(cfg, "material", "W")
+    material = get_cfg_field(cfg, "material", d["material"])
 
-    pavg = get_cfg_field(cfg, "Pavg", 1.0)
-    spot_radius = get_cfg_field(cfg, "spotRadius", 80e-6)
-    f_rep = get_cfg_field(cfg, "f_rep", 1e6)
-    tau_fwhm = get_cfg_field(cfg, "tau_FWHM", 100e-15)
-    pulse_profile_name = get_cfg_field(cfg, "pulseProfile", "gaussian")
+    pavg = get_cfg_field(cfg, "Pavg", d["Pavg"])
+    spot_radius = get_cfg_field(cfg, "spotRadius", d["spotRadius"])
+    f_rep = get_cfg_field(cfg, "f_rep", d["f_rep"])
+    tau_fwhm = get_cfg_field(cfg, "tau_FWHM", d["tau_FWHM"])
+    pulse_profile_name = get_cfg_field(cfg, "pulseProfile", d["pulseProfile"])
 
-    absorbance = get_cfg_field(cfg, "absorbance", 0.55)
-    t0_c = get_cfg_field(cfg, "T0_C", 25.0)
+    absorbance = get_cfg_field(cfg, "absorbance", d["absorbance"])
+    t0_c = get_cfg_field(cfg, "T0_C", d["T0_C"])
 
-    lz = get_cfg_field(cfg, "Lz", 1000e-9)
-    nz = int(get_cfg_field(cfg, "Nz", 200))
+    lz = get_cfg_field(cfg, "Lz", d["Lz"])
+    nz = int(get_cfg_field(cfg, "Nz", d["Nz"]))
 
     n_pulses = 1  # always 1 for the single-pulse visualizer
 
     snapshot_delays = np.asarray(
-        get_cfg_field(cfg, "snapshotDelays", _DEFAULT_SNAPSHOT_DELAYS), dtype=float)
+        get_cfg_field(cfg, "snapshotDelays", d["snapshotDelays"]), dtype=float)
 
-    rel_tol = get_cfg_field(cfg, "relTol", 1e-6)
-    abs_tol = get_cfg_field(cfg, "absTol", 1e-1)
+    rel_tol = get_cfg_field(cfg, "relTol", d["relTol"])
+    abs_tol = get_cfg_field(cfg, "absTol", d["absTol"])
 
     mat = resolve_material(cfg, needs_optical=True)
     gamma, cl, g_ep = mat.gamma, mat.cl, mat.g_ep

@@ -32,6 +32,7 @@ from .kernels import (
 )
 from .materials import k_model_name, k_table, resolve_material
 from .progress import ProgressReporter
+from .schema import defaults as schema_defaults
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 
@@ -372,8 +373,12 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     if cfg is None:
         cfg = {}
 
-    make_plots = get_cfg_field(cfg, "makePlots", True)
-    save_figures = get_cfg_field(cfg, "saveFigures", False)
+    # Defaults come from the schema so there is one place to read them and
+    # one place they can change. See schema.describe_solver('radial_profile').
+    d = schema_defaults("radial_profile")
+
+    make_plots = get_cfg_field(cfg, "makePlots", d["makePlots"])
+    save_figures = get_cfg_field(cfg, "saveFigures", d["saveFigures"])
     if save_figures:
         make_plots = True
 
@@ -381,7 +386,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     # the timeline plots), bounding memory for very long runs: ~100k pulses
     # would otherwise accumulate gigabytes of RK4/coast samples. All physics,
     # per-pulse scalars, and radial profiles are unaffected.
-    store_history = bool(get_cfg_field(cfg, "storeHistory", True))
+    store_history = bool(get_cfg_field(cfg, "storeHistory", d["storeHistory"]))
     if not store_history and make_plots:
         print("  storeHistory=False: time-history figures disabled.")
         make_plots = False
@@ -390,41 +395,45 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     print("=== Radial Surface TTM Pulsed Laser Calculator ===")
 
     # ========================  USER INPUTS  =================================
-    material = get_cfg_field(cfg, "material", "W")
+    material = get_cfg_field(cfg, "material", d["material"])
     mat = resolve_material(cfg, needs_optical=False)
     gamma, cl, g_ep, kl = mat.gamma, mat.cl, mat.g_ep, mat.k_total
 
-    pavg = get_cfg_field(cfg, "Pavg", 40.0)
-    spot_radius = get_cfg_field(cfg, "spotRadius", 100e-6)
-    f_rep = get_cfg_field(cfg, "f_rep", 18e6)
-    tau_fwhm = get_cfg_field(cfg, "tau_FWHM", 100e-15)
-    pulse_profile_name = get_cfg_field(cfg, "pulseProfile", "gaussian")
+    pavg = get_cfg_field(cfg, "Pavg", d["Pavg"])
+    spot_radius = get_cfg_field(cfg, "spotRadius", d["spotRadius"])
+    f_rep = get_cfg_field(cfg, "f_rep", d["f_rep"])
+    tau_fwhm = get_cfg_field(cfg, "tau_FWHM", d["tau_FWHM"])
+    pulse_profile_name = get_cfg_field(cfg, "pulseProfile", d["pulseProfile"])
 
-    absorbance = get_cfg_field(cfg, "absorbance", 0.55)
-    leff = get_cfg_field(cfg, "Leff", 100e-9)
-    t0_c = get_cfg_field(cfg, "T0_C", 25.0)
+    absorbance = get_cfg_field(cfg, "absorbance", d["absorbance"])
+    leff = get_cfg_field(cfg, "Leff", d["Leff"])
+    t0_c = get_cfg_field(cfg, "T0_C", d["T0_C"])
 
-    nr = int(get_cfg_field(cfg, "Nr", 80))
-    r_max_factor = get_cfg_field(cfg, "rMax_factor", 5)
+    nr = int(get_cfg_field(cfg, "Nr", d["Nr"]))
+    r_max_factor = get_cfg_field(cfg, "rMax_factor", d["rMax_factor"])
 
-    radial_solve_mode = str(get_cfg_field(cfg, "radialSolveMode", "scale")).lower()
-    if radial_solve_mode not in ("scale", "independent"):
+    radial_solve_mode = str(
+        get_cfg_field(cfg, "radialSolveMode", d["radialSolveMode"])).lower()
+    if radial_solve_mode not in _SOLVE_MODES:
         raise ValueError(
             f'Unknown radialSolveMode "{radial_solve_mode}". '
-            "Use 'scale' or 'independent'.")
+            f"Use {' or '.join(repr(m) for m in _SOLVE_MODES)}.")
 
-    sim_duration = get_cfg_field(cfg, "simDuration", 1e-3)
+    sim_duration = get_cfg_field(cfg, "simDuration", d["simDuration"])
 
-    early_stop_melt_radius_um = get_cfg_field(cfg, "earlyStopMeltRadius_um", 0)
+    early_stop_melt_radius_um = get_cfg_field(
+        cfg, "earlyStopMeltRadius_um", d["earlyStopMeltRadius_um"])
     # Defaults to this material's melting point, not tungsten's.
     early_stop_t_melt_c = get_cfg_field(cfg, "earlyStopT_melt_C", mat.t_melt_c)
-    early_stop_check_interval = int(get_cfg_field(cfg, "earlyStopCheckInterval", 100))
+    early_stop_check_interval = int(get_cfg_field(
+        cfg, "earlyStopCheckInterval", d["earlyStopCheckInterval"]))
     early_stop_enabled = early_stop_melt_radius_um > 0
 
-    depth_profile = str(get_cfg_field(cfg, "depthProfile", "exponential")).lower()
-    dz_target = get_cfg_field(cfg, "dzTarget", 500e-9)
-    n_diff_min = int(get_cfg_field(cfg, "Ndiff", 100))
-    show_progress = get_cfg_field(cfg, "showProgress", None)
+    depth_profile = str(
+        get_cfg_field(cfg, "depthProfile", d["depthProfile"])).lower()
+    dz_target = get_cfg_field(cfg, "dzTarget", d["dzTarget"])
+    n_diff_min = int(get_cfg_field(cfg, "Ndiff", d["Ndiff"]))
+    show_progress = get_cfg_field(cfg, "showProgress", d["showProgress"])
 
     # Hybrid k(T): tungsten table, constant kl otherwise (this solver has no
     # separate electron conductivity, unlike the depth solver's ke0+kl table)
