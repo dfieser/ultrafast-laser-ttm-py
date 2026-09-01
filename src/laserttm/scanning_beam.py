@@ -24,6 +24,7 @@ from scipy.io import savemat
 from .config import get_cfg_field, safe_tag
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
 from .materials import resolve_material
+from .physics import derive_laser, equilibrate
 from .progress import ProgressReporter
 from .schema import defaults as schema_defaults
 from .schema import require_pulses
@@ -35,8 +36,6 @@ from .units import smart_energy, smart_freq, smart_length, smart_time
 _DEFAULTS = {k: v for k, v in schema_defaults("scanning_beam").items()
              if v is not None}
 
-def _matlab_round(x: float) -> int:
-    return int(np.floor(x + 0.5))
 
 
 def scanning_beam_solver(params: dict | None = None,
@@ -85,14 +84,17 @@ def scanning_beam_solver(params: dict | None = None,
     dz_target = params["dzTarget"]
 
     # ==================  Derived quantities  ================================
-    t0 = t0_c + 273.15
-    ep = pavg / f_rep
-    f_peak = 2.0 * ep / (np.pi * spot_radius**2)
-    eabs_vol = absorbance * f_peak / leff
-    trep = 1.0 / f_rep
-    alpha_l = kl / cl
     sim_duration = scan_length / v_scan
-    n_pulses = _matlab_round(sim_duration * f_rep)
+    dl = derive_laser(pavg=pavg, f_rep=f_rep, spot_radius=spot_radius,
+                      absorbance=absorbance, t0_c=t0_c, gamma=gamma,
+                      g_ep=g_ep, sim_duration=sim_duration)
+    t0 = dl.t0_k
+    ep = dl.pulse_energy
+    f_peak = dl.peak_fluence
+    eabs_vol = dl.absorbed_fluence / leff
+    trep = dl.period
+    alpha_l = kl / cl
+    n_pulses = dl.n_pulses
     require_pulses("scanning_beam", n_pulses)
     pulse_spacing = v_scan / f_rep
 
@@ -121,8 +123,7 @@ def scanning_beam_solver(params: dict | None = None,
     prof_code = profile_code(pulse_profile_name)
     te_end, tl_end = rk4_single_pulse_response(
         t0, gamma, g_ep, cl, tau_fwhm, pulse_offset, prof_code, eabs_vol)
-    utot = 0.5 * gamma * te_end**2 + cl * tl_end
-    teq_single = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
+    teq_single = equilibrate(te_end, tl_end, gamma, cl)
     dteq_single = teq_single - t0
 
     # ==================  Precompute for the vectorized loop  ================
@@ -156,7 +157,8 @@ def scanning_beam_solver(params: dict | None = None,
 
     tic_all = time.perf_counter()
     progress = ProgressReporter(n_pulses, title="laserttm: scanning beam",
-                                enabled=params.get("showProgress"))
+                                enabled=get_cfg_field(params, "showProgress",
+                                                      None))
     np_done = 0
     while np_done < n_pulses:
         np_next = min(np_done + progress_interval, n_pulses)

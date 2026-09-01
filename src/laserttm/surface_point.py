@@ -21,6 +21,12 @@ import numpy as np
 from .config import get_cfg_field, safe_tag
 from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
 from .materials import resolve_material
+from .physics import (
+    deposit_pulse,
+    depth_deposit_shape,
+    derive_laser,
+    equilibrate,
+)
 from .progress import ProgressReporter
 from .schema import defaults as schema_defaults
 from .schema import require_pulses
@@ -29,9 +35,6 @@ from .units import smart_energy, smart_freq, smart_length, smart_time
 _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
 
-def _matlab_round(x: float) -> int:
-    """MATLAB round(): half away from zero (positive args here)."""
-    return int(np.floor(x + 0.5))
 
 
 def surface_point_solver(cfg: dict | None = None) -> dict:
@@ -86,16 +89,18 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     gamma, cl, g_ep, kl = mat.gamma, mat.cl, mat.g_ep, mat.k_total
 
     # ==================  Incident Fluence  ==================================
-    ep_calc = pavg / f_rep                                  # Pulse energy [J]
-    f_si = 2.0 * ep_calc / (np.pi * spot_radius**2)         # Peak Gaussian fluence [J/m^2]
-
-    t0 = t0_c + 273.15
-    eabs_areal = absorbance * f_si                          # [J/m^2]
+    dl = derive_laser(pavg=pavg, f_rep=f_rep, spot_radius=spot_radius,
+                      absorbance=absorbance, t0_c=t0_c, gamma=gamma,
+                      g_ep=g_ep, sim_duration=sim_duration)
+    ep_calc = dl.pulse_energy
+    f_si = dl.peak_fluence
+    t0 = dl.t0_k
+    eabs_areal = dl.absorbed_fluence
     eabs_vol = eabs_areal / leff                            # [J/m^3]
-    trep = 1.0 / f_rep
-    n_pulses = _matlab_round(sim_duration * f_rep)
+    trep = dl.period
+    n_pulses = dl.n_pulses
     require_pulses("surface_point", n_pulses)
-    tau_eph = gamma * t0 / g_ep
+    tau_eph = dl.tau_eph
 
     # Diffusion parameters
     alpha_l = kl / cl
@@ -121,8 +126,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
 
     # Loop-invariant deposit shape and coast sampling stride
     depth_is_exp = str(depth_profile).lower() == "exponential"
-    exp_decay_z = np.exp(-z_grid / leff)
-    box_mask_z = z_grid <= leff
+    exp_decay_z, box_mask_z = depth_deposit_shape(z_grid, leff)
     n_coast_sample = min(n_diff, 50)
     sample_interval = max(1, n_diff // n_coast_sample)
     progress_interval = max(1, n_pulses // 20)
@@ -184,8 +188,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
             track_t_end = float(loc_t[-1])
 
         # Equilibrium temperature (energy-conserving)
-        utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
-        teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
+        teq = equilibrate(loc_te[-1], loc_tl[-1], gamma, cl)
         teq_vals[np_i] = teq
 
         # --- Phase 2: 1D Crank-Nicolson thermal diffusion ---
@@ -198,10 +201,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
 
         if coast_gap > 0:
             # Set initial depth profile from post-pulse Teq
-            if depth_is_exp:
-                tz = tz + (teq - tz[0]) * exp_decay_z
-            else:  # 'box' and the MATLAB otherwise-branch
-                tz[box_mask_z] = teq
+            tz = deposit_pulse(tz, teq, exp_decay_z, box_mask_z, depth_is_exp)
 
             tz, c_t, c_tl = cn_coast_const(
                 tz, coast_gap, n_diff, alpha_l, dz, t0, t_fine_end, sample_interval

@@ -31,14 +31,16 @@ from .kernels import (
     rk4_pulse_phase,
 )
 from .materials import k_model_name, k_table, resolve_material
+from .physics import (
+    deposit_pulse,
+    depth_deposit_shape,
+    derive_laser,
+    equilibrate,
+)
 from .progress import ProgressReporter
 from .schema import defaults as schema_defaults
 from .schema import require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
-
-
-def _matlab_round(x: float) -> int:
-    return int(np.floor(x + 0.5))
 
 
 def _melt_radius_um(t_surf_c: np.ndarray, r_grid: np.ndarray,
@@ -176,8 +178,7 @@ def _solve_scale(s: _Setup, st: _State, progress: ProgressReporter) -> None:
             st.cell_times.append(loc_t)
             st.cell_tl.append(loc_tl)
 
-        utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
-        teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
+        teq = equilibrate(loc_te[-1], loc_tl[-1], gamma, cl)
         st.teq_vals[np_i] = teq
 
         # Deposit pulse heat into the radial surface array
@@ -193,10 +194,8 @@ def _solve_scale(s: _Setup, st: _State, progress: ProgressReporter) -> None:
         coast_gap = t_next_start - t_fine_end
 
         if coast_gap > 0:
-            if s.depth_is_exp:
-                tz = tz + (teq - tz[0]) * s.exp_decay_z
-            else:  # 'box' and the MATLAB otherwise-branch
-                tz[s.box_mask_z] = teq
+            tz = deposit_pulse(tz, teq, s.exp_decay_z, s.box_mask_z,
+                               s.depth_is_exp)
 
             n_diff_local = max(s.n_diff, int(np.ceil(
                 alpha_l * coast_gap / (f_target * dz**2))))
@@ -288,17 +287,13 @@ def _solve_independent(s: _Setup, st: _State, progress: ProgressReporter) -> Non
                     st.cell_tl.append(loc_tl)
                 t_fine_end_center = loc_t[-1]
 
-            utot = 0.5 * gamma * loc_te[-1] ** 2 + cl * loc_tl[-1]
-            teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
+            teq = equilibrate(loc_te[-1], loc_tl[-1], gamma, cl)
             if ri == 0:
                 st.teq_vals[np_i] = teq
 
             # Deposit pulse energy into this node's depth profile
-            if s.depth_is_exp:
-                tz_all[:, ri] = tz_all[:, ri] \
-                    + (teq - tz_all[0, ri]) * s.exp_decay_z
-            else:
-                tz_all[s.box_mask_z, ri] = teq
+            tz_all[:, ri] = deposit_pulse(tz_all[:, ri], teq, s.exp_decay_z,
+                                          s.box_mask_z, s.depth_is_exp)
             te_all[ri] = teq
             tl_all[ri] = teq
 
@@ -441,13 +436,16 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     k_tab_t, k_tab_k = k_table(mat)
 
     # ==================  Derived quantities  ================================
-    t0 = t0_c + 273.15
-    ep = pavg / f_rep
-    f_peak = 2.0 * ep / (np.pi * spot_radius**2)
-    eabs_areal = absorbance * f_peak
+    dl = derive_laser(pavg=pavg, f_rep=f_rep, spot_radius=spot_radius,
+                      absorbance=absorbance, t0_c=t0_c, gamma=gamma,
+                      g_ep=g_ep, sim_duration=sim_duration)
+    t0 = dl.t0_k
+    ep = dl.pulse_energy
+    f_peak = dl.peak_fluence
+    eabs_areal = dl.absorbed_fluence
     eabs_vol = eabs_areal / leff
-    trep = 1.0 / f_rep
-    n_pulses = _matlab_round(sim_duration * f_rep)
+    trep = dl.period
+    n_pulses = dl.n_pulses
     require_pulses("radial_profile", n_pulses)
 
     # Diffusion parameters (hybrid k at T0 for grid sizing)
@@ -490,8 +488,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
 
     # Loop-invariant deposit shape (same precompute as scanning_beam)
     depth_is_exp = depth_profile == "exponential"
-    exp_decay_z = np.exp(-z_grid / leff)
-    box_mask_z = z_grid <= leff
+    exp_decay_z, box_mask_z = depth_deposit_shape(z_grid, leff)
 
     n_profile_snaps = min(n_pulses, 12)
     if n_pulses > 1:

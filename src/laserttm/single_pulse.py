@@ -23,6 +23,7 @@ from scipy.sparse import bmat, diags
 from .config import get_cfg_field, safe_tag
 from .kernels import profile_code, ttm_1d_rhs
 from .materials import k_table, resolve_material
+from .physics import derive_laser
 from .schema import defaults as schema_defaults
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
@@ -77,12 +78,15 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
     # kernel's ke0_local = (ke0+kl) - kl = ke0 at every temperature.
     k_tab_t, k_tab_k = k_table(mat, constant_only=True)
 
-    t0 = t0_c + 273.15
-    ep = pavg / f_rep
-    f_peak = 2.0 * ep / (np.pi * spot_radius**2)
-    eabs_areal = absorbance * f_peak
-    trep = 1.0 / f_rep
-    tau_eph = gamma * t0 / g_ep
+    dl = derive_laser(pavg=pavg, f_rep=f_rep, spot_radius=spot_radius,
+                      absorbance=absorbance, t0_c=t0_c, gamma=gamma,
+                      g_ep=g_ep)
+    t0 = dl.t0_k
+    ep = dl.pulse_energy
+    f_peak = dl.peak_fluence
+    eabs_areal = dl.absorbed_fluence
+    trep = dl.period
+    tau_eph = dl.tau_eph
     delta_opt = 1.0 / alpha_opt
 
     assert nz >= 3, "Need at least 3 spatial nodes."

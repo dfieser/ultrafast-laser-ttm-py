@@ -32,6 +32,7 @@ from .kernels import (
     ttm_1d_rhs,
 )
 from .materials import k_model_name, k_table, resolve_material
+from .physics import bath_energy_density, derive_laser, equilibrium_temperature
 from .progress import ProgressReporter
 from .schema import defaults as schema_defaults
 from .schema import require_pulses
@@ -46,8 +47,6 @@ _INV_THRESHOLD_K = 0.5
 _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
 
-def _matlab_round(x: float) -> int:
-    return int(np.floor(x + 0.5))
 
 
 def _derive_radial_view(profile_snaps_tz, t0, spot_radius, nr_radial,
@@ -155,14 +154,17 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     k_tab_t, k_tab_k = k_table(mat)
 
     # ==================  Derived quantities  ================================
-    t0 = t0_c + 273.15
-    ep = pavg / f_rep
-    f_peak = 2.0 * ep / (np.pi * spot_radius**2)
-    eabs_areal = absorbance * f_peak
-    trep = 1.0 / f_rep
-    tau_eph = gamma * t0 / g_ep
+    dl = derive_laser(pavg=pavg, f_rep=f_rep, spot_radius=spot_radius,
+                      absorbance=absorbance, t0_c=t0_c, gamma=gamma,
+                      g_ep=g_ep, sim_duration=sim_duration)
+    t0 = dl.t0_k
+    ep = dl.pulse_energy
+    f_peak = dl.peak_fluence
+    eabs_areal = dl.absorbed_fluence
+    trep = dl.period
+    tau_eph = dl.tau_eph
     delta_opt = 1.0 / alpha_opt
-    n_pulses = _matlab_round(sim_duration * f_rep)
+    n_pulses = dl.n_pulses
     require_pulses("depth_profile", n_pulses)
 
     # Phase 2 coarse diffusion grid
@@ -402,8 +404,10 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         tl_end_fine = y_sol[-1, nz:]
         t_equil_fine = 0.5 * (te_end_fine + tl_end_fine)
 
-        utot = _trapezoid(0.5 * gamma * te_end_fine**2 + cl * tl_end_fine, z_grid) / lz
-        teq = (-cl + np.sqrt(cl**2 + 2.0 * gamma * utot)) / gamma
+        utot = _trapezoid(
+            bath_energy_density(te_end_fine, tl_end_fine, gamma, cl),
+            z_grid) / lz
+        teq = equilibrium_temperature(utot, gamma, cl)
         teq_vals[np_i - 1] = teq
 
         if overlap_any:

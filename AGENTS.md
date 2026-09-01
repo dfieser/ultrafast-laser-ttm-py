@@ -40,6 +40,7 @@ are user visible.
 | `schema.py` | The input contract. Every config key with unit, default, range and meaning. Standard library only, so discovery never pays the numba import. |
 | `materials.py` | One `Material` record per metal, plus per-field overrides and the k(T) table choice. |
 | `config.py` | MATLAB `getCfgField` semantics: missing, None and empty fall back to the default. |
+| `physics.py` | The shared closed-form identities: two-bath energetics, the pulse deposit, derived pulse-train quantities. One home each, so a correction lands everywhere at once. |
 | `kernels.py` | Numba-jitted numerics, line-faithful to MATLAB. Treat as frozen. |
 | `runtools.py` | Solver registry and result serialization. |
 | `cli.py`, `mcp_server.py` | The two machine-facing front ends. |
@@ -62,6 +63,12 @@ justification in the commit message.
 **Physics does not belong in `plotting.py`.** Anything computed there is
 silently lost whenever `makePlots` is false, which is the default for both
 the CLI and the MCP server. This has already caused one real bug.
+
+**Shared identities live in `physics.py`, once.** The two-bath
+equilibration, the depth deposit, and the derived laser quantities used to
+exist as up to five inline copies, which is how a defect in one of them
+cost four extra fixes. Never re-inline one; call the helper, and put any
+new closed-form identity there in the same commit.
 
 **All physical inputs are SI.** Display conversion happens only in
 `units.py`. Open report files with an explicit `encoding`; the headers
