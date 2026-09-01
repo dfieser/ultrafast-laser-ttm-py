@@ -57,6 +57,20 @@ def _runs_root() -> str:
     return root
 
 
+def _write_json_atomic(path: str, payload: dict) -> None:
+    """Write JSON so the file never exists in a partially written state.
+
+    The status check treats the mere existence of summary.json or
+    error.json as "the run finished", so these files must appear
+    all-at-once. Writing them in place raced: a poller could observe the
+    file created but empty, and get_results would then fail decoding it.
+    """
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    os.replace(tmp, path)
+
+
 def _run_job(solver_id: str, cfg: dict, run_dir: str) -> None:
     """Worker-process entry point: run one solver, persist its outputs."""
     os.environ.setdefault("MPLBACKEND", "Agg")  # headless: never open windows
@@ -80,11 +94,10 @@ def _run_job(solver_id: str, cfg: dict, run_dir: str) -> None:
             results = get_solver(solver_id)(cfg)
             save_results_npz(results, os.path.join(run_dir, _RESULTS_NAME))
             summary = summarize_results(results, max_array=200)
-            with open(os.path.join(run_dir, _SUMMARY_NAME), "w", encoding="utf-8") as f:
-                json.dump(summary, f, indent=2)
+            _write_json_atomic(os.path.join(run_dir, _SUMMARY_NAME), summary)
         except Exception:
-            with open(os.path.join(run_dir, _ERROR_NAME), "w", encoding="utf-8") as f:
-                json.dump({"traceback": traceback.format_exc()}, f, indent=2)
+            _write_json_atomic(os.path.join(run_dir, _ERROR_NAME),
+                               {"traceback": traceback.format_exc()})
             raise
 
 
@@ -269,8 +282,8 @@ def start_run(solver: str, config: dict[str, Any] | None = None,
     run_id = uuid.uuid4().hex[:12]
     run_dir = os.path.join(_runs_root(), run_id)
     os.makedirs(run_dir, exist_ok=True)
-    with open(os.path.join(run_dir, _RUN_NAME), "w", encoding="utf-8") as f:
-        json.dump({"solver": solver, "started": time.time()}, f)
+    _write_json_atomic(os.path.join(run_dir, _RUN_NAME),
+                       {"solver": solver, "started": time.time()})
 
     proc = mp.get_context("spawn").Process(
         target=_run_job, args=(solver.strip().lower(), config or {}, run_dir),
