@@ -350,7 +350,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     out_path = os.path.join(output_dir, out_filename)
 
     leff_val, leff_unit = smart_length(leff)
-    with open(out_path, "w") as fid:
+    with open(out_path, "w", encoding="utf-8") as fid:
         fid.write("============================================================\n")
         fid.write("  Surface TTM Pulsed Laser Calculator — Output\n")
         # Local wall-clock on purpose, matching the MATLAB reference output

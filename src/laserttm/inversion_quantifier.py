@@ -170,7 +170,7 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
         out_filename = f"{case_tag}__{out_filename}"
     out_path = os.path.join(output_dir, out_filename)
 
-    with open(out_path, "w") as fid:
+    with open(out_path, "w", encoding="utf-8") as fid:
         fid.write("============================================================\n")
         fid.write("  Temperature Inversion Quantifier — Output\n")
         # Local wall-clock on purpose, matching the MATLAB reference output

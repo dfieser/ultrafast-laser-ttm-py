@@ -216,7 +216,7 @@ def scanning_beam_solver(params: dict | None = None,
                  f"{scan_str}_{n_pulses}p")
 
     out_path = os.path.join(output_dir, base_name + ".txt")
-    with open(out_path, "w") as fid:
+    with open(out_path, "w", encoding="utf-8") as fid:
         fid.write("============================================================\n")
         fid.write("  Moving Laser TTM — Output\n")
         # Local wall-clock on purpose, matching the MATLAB reference output

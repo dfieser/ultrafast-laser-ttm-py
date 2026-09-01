@@ -223,7 +223,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         if args.out.endswith(".npz"):
             save_results_npz(results, args.out)
         else:
-            with open(args.out, "w") as f:
+            with open(args.out, "w", encoding="utf-8") as f:
                 json.dump(summarize_results(results, max_array=args.max_array),
                           f, indent=2)
         print(f"Results written to: {args.out}")

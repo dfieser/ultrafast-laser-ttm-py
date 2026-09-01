@@ -1,8 +1,8 @@
-﻿"""Radial surface pulsed-laser TTM solver.
+"""Radial surface pulsed-laser TTM solver.
 
-Python port of ``src/Radial_Profile_Solver.m``: 0D electronâ€“lattice dynamics
+Python port of ``src/Radial_Profile_Solver.m``: 0D electron–lattice dynamics
 mapped radially under the Gaussian beam profile, with per-pulse depth
-Crankâ€“Nicolson cooling and cylindrical-coordinate radial diffusion, both with
+Crank–Nicolson cooling and cylindrical-coordinate radial diffusion, both with
 temperature-dependent k(T).
 
 Two modes, as in MATLAB (``radialSolveMode``): ``'scale'`` (default) solves
@@ -580,7 +580,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     sim_dur_v, sim_dur_u = smart_time(sim_duration)
 
     print("\n============================================================")
-    print("  Radial Surface TTM Calculator â€” Results")
+    print("  Radial Surface TTM Calculator — Results")
     print("============================================================")
     print(f"  Material:              {str(material).upper()}")
     print(f"  Mode:                  {radial_solve_mode}")
@@ -623,9 +623,9 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     out_path = os.path.join(output_dir, out_filename)
 
     final_radial_t = tresid_radial[-1, :]
-    with open(out_path, "w") as fid:
+    with open(out_path, "w", encoding="utf-8") as fid:
         fid.write("============================================================\n")
-        fid.write("  Radial Surface TTM Calculator â€” Output\n")
+        fid.write("  Radial Surface TTM Calculator — Output\n")
         # Local wall-clock on purpose, matching the MATLAB reference output
         fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
         fid.write(f"  Mode: {radial_solve_mode}\n")

@@ -79,10 +79,10 @@ def _run_job(solver_id: str, cfg: dict, run_dir: str) -> None:
             results = get_solver(solver_id)(cfg)
             save_results_npz(results, os.path.join(run_dir, _RESULTS_NAME))
             summary = summarize_results(results, max_array=200)
-            with open(os.path.join(run_dir, _SUMMARY_NAME), "w") as f:
+            with open(os.path.join(run_dir, _SUMMARY_NAME), "w", encoding="utf-8") as f:
                 json.dump(summary, f, indent=2)
         except Exception:
-            with open(os.path.join(run_dir, _ERROR_NAME), "w") as f:
+            with open(os.path.join(run_dir, _ERROR_NAME), "w", encoding="utf-8") as f:
                 json.dump({"traceback": traceback.format_exc()}, f, indent=2)
             raise
 
