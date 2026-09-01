@@ -23,6 +23,7 @@ from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
 from .materials import resolve_material
 from .progress import ProgressReporter
 from .schema import defaults as schema_defaults
+from .schema import require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
@@ -82,6 +83,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     eabs_vol = eabs_areal / leff                            # [J/m^3]
     trep = 1.0 / f_rep
     n_pulses = _matlab_round(sim_duration * f_rep)
+    require_pulses("surface_point", n_pulses)
     tau_eph = gamma * t0 / g_ep
 
     # Diffusion parameters

@@ -43,6 +43,7 @@ __all__ = [
     "estimate_run",
     "json_schema",
     "list_solvers",
+    "require_pulses",
     "solver_schema",
     "validate_config",
 ]
@@ -112,8 +113,11 @@ _CATALOG: tuple[ParamSpec, ...] = (
        unit="s", default=100e-15, minimum=1e-18, maximum=1e-6,
        typical=(1e-15, 1e-11), group="laser"),
     _p("pulseProfile", "enum", "Temporal shape of a single pulse.",
-       default="gaussian", choices=("gaussian", "square", "sech2"),
-       group="laser"),
+       default="gaussian", choices=("gaussian", "square", "exp"),
+       group="laser",
+       notes="'exp' is a one-sided exponential, zero before the pulse and "
+             "exp(-t/tau)/tau after it. There tau is tau_FWHM used as a decay "
+             "constant rather than a full width."),
     _p("absorbance", "float",
        "Absorbed fraction of incident fluence, A in 0 to 1.",
        default=0.55, minimum=0.0, maximum=1.0, typical=(0.05, 0.95),
@@ -210,8 +214,11 @@ _CATALOG: tuple[ParamSpec, ...] = (
     _p("Ndiff", "int",
        "Crank-Nicolson substeps per inter-pulse period.",
        default=100, minimum=1, maximum=int(1e7), group="grid"),
-    _p("Nr", "int", "Radial node count.", default=80, minimum=2,
-       maximum=100000, group="grid"),
+    _p("Nr", "int", "Radial node count.", default=80, minimum=3,
+       maximum=100000, group="grid",
+       notes="The cylindrical Crank-Nicolson stencil needs at least three "
+             "nodes: a centre, one interior node, and the fixed outer "
+             "boundary."),
     _p("rMax_factor", "float",
        "Radial extent as a multiple of the spot radius.",
        default=5.0, minimum=0.5, maximum=100.0, group="grid"),
@@ -588,6 +595,26 @@ def _matlab_round(x: float) -> int:
     return math.floor(x + 0.5)
 
 
+def require_pulses(solver_id: str, n_pulses: int) -> None:
+    """Reject a config that rounds to no pulses, before the solver runs.
+
+    The pulse loop would simply never execute, leaving every accumulator
+    empty, and the failure would surface much later as an unhelpful error
+    from concatenating nothing.
+    """
+    if n_pulses >= 1:
+        return
+    if solver_id == "scanning_beam":
+        fix = ("Lengthen scanLength, lower v_scan, or raise f_rep so that "
+               "scanLength / v_scan * f_rep is at least 1.")
+    else:
+        fix = ("Raise simDuration to at least one pulse period, 1 / f_rep. "
+               "For N pulses use simDuration = N / f_rep.")
+    raise ValueError(
+        f"{solver_id} was asked to simulate 0 pulses, so there is nothing to "
+        f"solve. {fix}")
+
+
 def estimate_run(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
     """Pulse count and rough runtime for a config, without running anything.
 
@@ -755,6 +782,28 @@ def validate_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
 
     resolved = {**sch.defaults(), **cfg}
     estimate = estimate_run(sch.id, cfg) if not errors else None
+
+    # A config that rounds to no pulses at all is not runnable: the pulse loop
+    # never executes and the solver fails later on an empty result. Catch it
+    # here, where the fix can be named.
+    if estimate and estimate["nPulses"] < 1:
+        if sch.id == "scanning_beam":
+            fix = ("Lengthen scanLength, lower v_scan, or raise f_rep so that "
+                   "scanLength / v_scan * f_rep is at least 1.")
+        else:
+            fix = ("Raise simDuration to at least one pulse period, "
+                   "1 / f_rep. For N pulses use simDuration = N / f_rep.")
+        errors.append({
+            "code": "no_pulses",
+            "key": "scanLength" if sch.id == "scanning_beam" else "simDuration",
+            "value": resolved.get(
+                "scanLength" if sch.id == "scanning_beam" else "simDuration"),
+            "message": "This config simulates 0 pulses, so there is nothing "
+                       "to solve.",
+            "suggestion": fix,
+        })
+        estimate = None
+
     if estimate and estimate["estRuntime_s"] > 600:
         warnings.append({
             "code": "expensive_run", "key": "simDuration",

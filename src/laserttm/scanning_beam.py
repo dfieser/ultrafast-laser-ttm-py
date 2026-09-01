@@ -26,6 +26,7 @@ from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
 from .materials import resolve_material
 from .progress import ProgressReporter
 from .schema import defaults as schema_defaults
+from .schema import require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 # Defaults come from the schema, which is the single place they are declared
@@ -92,6 +93,7 @@ def scanning_beam_solver(params: dict | None = None,
     alpha_l = kl / cl
     sim_duration = scan_length / v_scan
     n_pulses = _matlab_round(sim_duration * f_rep)
+    require_pulses("scanning_beam", n_pulses)
     pulse_spacing = v_scan / f_rep
 
     # Depth grid — dz must resolve the heated layer (Leff)

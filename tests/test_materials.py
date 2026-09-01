@@ -145,6 +145,20 @@ def test_k_table_choice_can_be_forced():
         resolve_material({"material": "W", "kTable": "bogus"}, needs_optical=False)
 
 
+def test_measured_table_is_refused_for_metals_that_have_none():
+    """Only tungsten ships a measured k(T) curve. Forcing 'measured' on
+    another metal would hand it tungsten's conductivity while every report
+    still stated its own."""
+    for key in ("Cu", "Al", "Au"):
+        with pytest.raises(ValueError, match="no measured"):
+            resolve_material({"material": key, "kTable": "measured"},
+                             needs_optical=False)
+
+    with pytest.raises(ValueError, match="no measured"):
+        resolve_material({"material": "custom", "kTable": "measured"},
+                         needs_optical=False)
+
+
 def test_tungsten_gets_the_measured_table_and_others_a_flat_one():
     t_w, k_w = k_table(resolve_material({"material": "W"}, needs_optical=False))
     assert t_w.size > 2

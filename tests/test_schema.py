@@ -255,6 +255,75 @@ def test_independent_mode_is_estimated_as_more_expensive():
     assert independent["estRuntime_s"] > scaled["estRuntime_s"] * 10
 
 
+def test_enum_choices_match_what_the_code_accepts():
+    """An enum the schema advertises but no consumer implements is worse than
+    no schema: validation passes and the run then fails."""
+    from laserttm.kernels import _PROFILE_CODES
+    from laserttm.materials import MATERIALS
+    from laserttm.radial_profile import _SOLVE_MODES
+
+    # Material names are matched case-insensitively, so compare them that way.
+    expected = {
+        "pulseProfile": set(_PROFILE_CODES),
+        "radialSolveMode": set(_SOLVE_MODES),
+        "material": set(MATERIALS) | {"custom"},
+    }
+    for sid in schema.SOLVER_IDS:
+        params = schema.solver_schema(sid).params
+        for key, accepted in expected.items():
+            if key in params:
+                choices = {c.lower() for c in params[key].choices}
+                assert choices == accepted, f"{sid}.{key}"
+
+
+def test_every_advertised_pulse_profile_actually_runs():
+    from laserttm.kernels import profile_code
+
+    for name in schema.PARAMS["pulseProfile"].choices:
+        profile_code(name)   # raises if the kernel does not implement it
+
+
+def test_zero_pulse_config_is_rejected_with_the_fix_named():
+    """simDuration below half a pulse period rounds to no pulses. It used to
+    validate cleanly and then fail deep inside the solver."""
+    result = schema.validate_config(
+        "surface_point", {"f_rep": 1e6, "simDuration": 1e-9})
+    assert not result["ok"]
+    (problem,) = [p for p in result["errors"] if p["code"] == "no_pulses"]
+    assert "simDuration = N / f_rep" in problem["suggestion"]
+
+
+def test_zero_pulse_scan_names_the_scanning_keys():
+    result = schema.validate_config(
+        "scanning_beam", {"scanLength": 1e-9, "v_scan": 1.0, "f_rep": 1e3})
+    assert not result["ok"]
+    (problem,) = [p for p in result["errors"] if p["code"] == "no_pulses"]
+    assert "scanLength" in problem["suggestion"]
+
+
+def test_one_pulse_is_still_allowed():
+    result = schema.validate_config(
+        "surface_point", {"f_rep": 1e6, "simDuration": 1 / 1e6})
+    assert result["ok"]
+    assert result["estimate"]["nPulses"] == 1
+
+
+def test_radial_node_minimum_matches_the_stencil():
+    """The cylindrical Crank-Nicolson stencil divides by (Nr - 2), so two
+    nodes is not a usable grid."""
+    assert schema.PARAMS["Nr"].minimum == 3
+    assert not schema.validate_config("radial_profile", {"Nr": 2})["ok"]
+    assert schema.validate_config("radial_profile", {"Nr": 3})["ok"]
+
+
+def test_require_pulses_guards_direct_python_calls():
+    schema.require_pulses("surface_point", 1)          # fine
+    with pytest.raises(ValueError, match="0 pulses"):
+        schema.require_pulses("surface_point", 0)
+    with pytest.raises(ValueError, match="scanLength"):
+        schema.require_pulses("scanning_beam", 0)
+
+
 def test_schema_import_stays_light():
     """Discovery must not drag in numba or scipy: it is called to decide
     whether a run is worth starting."""

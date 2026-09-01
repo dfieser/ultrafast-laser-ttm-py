@@ -33,6 +33,7 @@ from .kernels import (
 from .materials import k_model_name, k_table, resolve_material
 from .progress import ProgressReporter
 from .schema import defaults as schema_defaults
+from .schema import require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 
@@ -447,6 +448,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     eabs_vol = eabs_areal / leff
     trep = 1.0 / f_rep
     n_pulses = _matlab_round(sim_duration * f_rep)
+    require_pulses("radial_profile", n_pulses)
 
     # Diffusion parameters (hybrid k at T0 for grid sizing)
     alpha_l = float(k_hybrid(np.array([t0]), k_tab_t, k_tab_k)[0]) / cl

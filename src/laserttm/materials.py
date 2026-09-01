@@ -183,6 +183,17 @@ def resolve_material(cfg, *, needs_optical: bool, overrides=None) -> Material:
 
     forced = str(get_cfg_field(cfg, "kTable", "auto")).lower()
     if forced == "measured":
+        # Only tungsten has a measured k(T) curve here. Forcing 'measured' on
+        # another metal would hand it tungsten's conductivity while every
+        # report still stated its own, so refuse instead.
+        if not MATERIALS.get(mat.key, mat).measured_k_table:
+            with_curve = ", ".join(sorted(
+                k.upper() for k, m in MATERIALS.items() if m.measured_k_table))
+            raise ValueError(
+                f'kTable="measured" is not available for material '
+                f'"{name}": no measured k(T) curve ships for it. A measured '
+                f"curve exists only for {with_curve}. Use kTable=\"auto\" to "
+                f"take this material's own conductivity, or supply kl.")
         mat = replace(mat, measured_k_table=True)
     elif forced == "constant":
         mat = replace(mat, measured_k_table=False)

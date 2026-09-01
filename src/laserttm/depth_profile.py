@@ -34,6 +34,7 @@ from .kernels import (
 from .materials import k_model_name, k_table, resolve_material
 from .progress import ProgressReporter
 from .schema import defaults as schema_defaults
+from .schema import require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 200e-12)
@@ -152,6 +153,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     tau_eph = gamma * t0 / g_ep
     delta_opt = 1.0 / alpha_opt
     n_pulses = _matlab_round(sim_duration * f_rep)
+    require_pulses("depth_profile", n_pulses)
 
     # Phase 2 coarse diffusion grid
     k_eff = float(k_hybrid(np.array([t0]), k_tab_t, k_tab_k)[0])
