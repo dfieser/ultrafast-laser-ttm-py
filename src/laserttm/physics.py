@@ -57,9 +57,9 @@ def equilibrate(te, tl, gamma: float, cl: float):
 def energy_mismatch_pct(absorbed_areal: float, stored_areal: float) -> float:
     """Relative energy-bookkeeping mismatch, in percent of the absorbed.
 
-    The hybrid models deposit energy in a 0D/fine stage and account for it
-    on a coarser depth grid, so a mismatch here is expected and diagnostic,
-    not an error. See deposit_pulse for the coarse-grid deposit caveat.
+    With the energy-conserving deposit this reduces to boundary losses
+    and integrator error. Under legacyDeposit it also carries the
+    coarse-grid deposit surplus described in deposit_pulse.
     """
     return abs(absorbed_areal - stored_areal) / max(abs(absorbed_areal),
                                                     np.finfo(float).eps) * 100.0
@@ -77,23 +77,71 @@ def depth_deposit_shape(z_grid: np.ndarray, leff: float):
     return np.exp(-z_grid / leff), z_grid <= leff
 
 
-def deposit_pulse(tz: np.ndarray, teq, exp_decay_z: np.ndarray,
-                  box_mask_z: np.ndarray, exponential: bool) -> np.ndarray:
-    """Deposit one pulse's temperature rise into a depth profile.
+def deposit_shape_weight(z_grid: np.ndarray, leff: float,
+                         exponential: bool) -> float:
+    """Trapezoid weight of the deposit shape on this grid [m].
 
-    Raises the surface node to teq and distributes the rise into depth by
-    the chosen shape, exactly as the MATLAB reference does.
-
-    Known limitation, deliberately preserved for parity with the published
-    reference: this deposit is not energy-conserving on a coarse grid.
-    When Leff is much smaller than the grid spacing, the surface control
-    volume absorbs more than the requested fluence, by roughly
-    (dz/2)/Leff. Any future correction belongs here and nowhere else,
-    and it changes published numbers, so it is the owner's call.
+    The thickness the grid actually assigns to the deposit: the same
+    trapezoid the solvers use for their energy bookkeeping, applied to
+    the shape deposit_pulse paints. On a grid that resolves Leff this
+    approaches Leff; on a coarser one it approaches dz/2, which is what
+    made the legacy deposit over-inject energy.
     """
     if exponential:
-        return tz + (teq - tz[0]) * exp_decay_z
-    tz[box_mask_z] = teq
+        return float(trapezoid(np.exp(-z_grid / leff), z_grid))
+    return float(trapezoid((z_grid <= leff).astype(np.float64), z_grid))
+
+
+def deposit_amplitude(teq, t_surf, gamma: float, cl: float, leff: float,
+                      shape_weight: float):
+    """Lattice-temperature amplitude carrying the layer's full energy [K].
+
+    The pulse leaves a layer of thickness Leff equilibrated at teq where
+    the surface previously sat at t_surf. Its energy above the old state,
+    electron and lattice bath both, is deposited as lattice heat, since
+    the electrons hand their share to the lattice within picoseconds
+    while the inter-pulse coast lasts microseconds:
+
+        E_areal = [u(teq) - u(t_surf)] * Leff
+        amp     = E_areal / (Cl * shape_weight)
+
+    so that Cl * trapezoid(amp * shape) equals E_areal exactly, on any
+    grid. kernels._deposit_amp is the jitted twin of this expression for
+    the scanning loop; a test pins the two together.
+    """
+    e_areal = (bath_energy_density(teq, teq, gamma, cl)
+               - bath_energy_density(t_surf, t_surf, gamma, cl)) * leff
+    return e_areal / (cl * shape_weight)
+
+
+def deposit_pulse(tz: np.ndarray, teq, exp_decay_z: np.ndarray,
+                  box_mask_z: np.ndarray, exponential: bool, *,
+                  amplitude=None) -> np.ndarray:
+    """Deposit one pulse's temperature rise into a depth profile.
+
+    With ``amplitude`` (from deposit_amplitude) the deposit conserves
+    energy on any grid: the shape is scaled so the grid's own trapezoid
+    of the added heat equals the layer energy exactly. On a coarse grid
+    the surface node then reads as a control-volume average rather than
+    the true surface temperature; shrink dzTarget to resolve early-time
+    surface values.
+
+    With ``amplitude=None`` the legacy MATLAB deposit runs instead: the
+    surface node is raised to teq and the rise decays by the shape. That
+    form is exact only when the grid resolves Leff. When it does not,
+    the surface control volume absorbs roughly (dz/2)/Leff times the
+    requested energy, and it always drops the electron bath's share of
+    the layer energy. It is kept so the golden fixtures keep proving the
+    port line-faithful, selected by the ``legacyDeposit`` config key.
+    """
+    if amplitude is None:
+        if exponential:
+            return tz + (teq - tz[0]) * exp_decay_z
+        tz[box_mask_z] = teq
+        return tz
+    if exponential:
+        return tz + amplitude * exp_decay_z
+    tz[box_mask_z] = tz[box_mask_z] + amplitude
     return tz
 
 

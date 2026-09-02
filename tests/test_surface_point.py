@@ -39,6 +39,10 @@ def _cfg_from_fixture(fx: dict, tmp_path) -> dict:
     cfg["outputDir"] = str(tmp_path)  # keep test output out of the fixtures dir
     cfg["makePlots"] = False
     cfg["saveFigures"] = False
+    # The fixtures are MATLAB output, so they pin the MATLAB deposit. The
+    # default deposit is energy-conserving and deliberately deviates; its
+    # own guarantee lives in tests/test_energy_conserving_deposit.py.
+    cfg["legacyDeposit"] = True
     return cfg
 
 

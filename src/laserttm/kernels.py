@@ -582,10 +582,19 @@ def _thomas_solve_prefactored(m, bp, c, d, x):
 
 
 @njit(cache=True)
+def _deposit_amp(teq, t_surf, gamma, cl, leff, shape_weight):
+    """Jitted twin of physics.deposit_amplitude; a test pins them equal."""
+    e_areal = ((0.5 * gamma * teq**2 + cl * teq)
+               - (0.5 * gamma * t_surf**2 + cl * t_surf)) * leff
+    return e_areal / (cl * shape_weight)
+
+
+@njit(cache=True)
 def scanning_chunk(np_start, np_end,
                    tsurf, tpeak, tz, peak_hist,
                    x_grid, gy_gauss, inv2w2, v_scan, trep, dteq_single, t0,
                    depth_is_exp, exp_decay_z, box_mask_z,
+                   legacy_deposit, gamma, cl, leff, w_shape,
                    n_cn, ndiff, r_diff,
                    nadi, fxdt, fydt):
     """Pulses np_start..np_end-1 (0-based) of the scanning-beam main loop.
@@ -594,6 +603,11 @@ def scanning_chunk(np_start, np_end,
     outer product, peak-map update, depth CN coast with survival scaling,
     then NadiPerGap ADI lateral-diffusion steps with Dirichlet T0 borders.
     All state arrays (tsurf, tpeak, tz, peak_hist) are updated in place.
+
+    The one sanctioned deviation from the MATLAB loop: unless
+    legacy_deposit is set, the depth-column deposit is energy-conserving
+    (see physics.deposit_pulse), so the survival factor comes from a
+    column holding the correct heat content.
     """
     ny, nx = tsurf.shape
 
@@ -649,14 +663,24 @@ def scanning_chunk(np_start, np_end,
         peak_hist[np_i] = peak_surf
 
         # --- Depth CN coast with survival scaling ---
-        if depth_is_exp:
-            delta = peak_surf - tz[0]
-            for iz in range(tz.size):
-                tz[iz] = tz[iz] + delta * exp_decay_z[iz]
+        if legacy_deposit:
+            if depth_is_exp:
+                delta = peak_surf - tz[0]
+                for iz in range(tz.size):
+                    tz[iz] = tz[iz] + delta * exp_decay_z[iz]
+            else:
+                for iz in range(tz.size):
+                    if box_mask_z[iz]:
+                        tz[iz] = peak_surf
         else:
-            for iz in range(tz.size):
-                if box_mask_z[iz]:
-                    tz[iz] = peak_surf
+            amp = _deposit_amp(peak_surf, tz[0], gamma, cl, leff, w_shape)
+            if depth_is_exp:
+                for iz in range(tz.size):
+                    tz[iz] = tz[iz] + amp * exp_decay_z[iz]
+            else:
+                for iz in range(tz.size):
+                    if box_mask_z[iz]:
+                        tz[iz] = tz[iz] + amp
         tsurf_max_before = tz[0]
 
         for _ in range(ndiff):

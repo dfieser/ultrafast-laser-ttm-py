@@ -16,7 +16,12 @@ one to one, and that correspondence is a documented feature.
 fixtures in `validation/fixtures/` down to rtol 1e-6. Do not change
 arithmetic, arithmetic order, loop structure, or accumulation order in
 `kernels.py` or inside any solver's pulse loop. Refactors there must be
-provable code moves. Run the full suite before and after.
+provable code moves. Run the full suite before and after. The one
+sanctioned deviation is the energy-conserving pulse deposit in
+`physics.deposit_pulse` (0.2.0): the fixtures pin the MATLAB behavior
+through `legacyDeposit: True`, and
+`tests/test_energy_conserving_deposit.py` pins the default. Do not add a
+second deviation without the owner's explicit decision.
 
 **The public API is additive only.** The six entry points, the config-dict
 convention, and every existing results key are consumed by PyPI users, the

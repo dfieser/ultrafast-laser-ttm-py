@@ -23,7 +23,7 @@ from scipy.io import savemat
 from .config import get_cfg_field
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
 from .materials import k_model_name, resolve_material
-from .physics import derive_laser, equilibrate
+from .physics import deposit_shape_weight, derive_laser, equilibrate
 from .progress import ProgressReporter
 from .reporting import apply_case_tag, case_tag, filename_slug, write_header
 from .schema import defaults as schema_defaults
@@ -137,6 +137,8 @@ def scanning_beam_solver(params: dict | None = None,
     else:
         exp_decay_z = np.zeros(nz)
         box_mask_z = z_grid <= leff
+    legacy_deposit = bool(get_cfg_field(params, "legacyDeposit", False))
+    w_shape = deposit_shape_weight(z_grid, leff, depth_is_exp)
 
     coast_gap = trep
     dt_diff = coast_gap / n_diff
@@ -166,6 +168,7 @@ def scanning_beam_solver(params: dict | None = None,
                        tsurf, tpeak_map, tz, peak_t_history,
                        x_grid, gy_gauss, inv2w2, v_scan, trep, dteq_single, t0,
                        depth_is_exp, exp_decay_z, box_mask_z,
+                       legacy_deposit, gamma, cl, leff, w_shape,
                        n_cn, n_diff, r_diff,
                        n_adi_per_gap, fxdt, fydt)
         np_done = np_next

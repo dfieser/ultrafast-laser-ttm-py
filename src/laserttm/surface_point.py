@@ -21,7 +21,9 @@ from .config import get_cfg_field
 from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
 from .materials import k_model_name, resolve_material
 from .physics import (
+    deposit_amplitude,
     deposit_pulse,
+    deposit_shape_weight,
     depth_deposit_shape,
     derive_laser,
     energy_mismatch_pct,
@@ -136,6 +138,9 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     # Loop-invariant deposit shape and coast sampling stride
     depth_is_exp = str(depth_profile).lower() == "exponential"
     exp_decay_z, box_mask_z = depth_deposit_shape(z_grid, leff)
+    legacy_deposit = bool(get_cfg_field(cfg, "legacyDeposit",
+                                        d["legacyDeposit"]))
+    w_shape = deposit_shape_weight(z_grid, leff, depth_is_exp)
     n_coast_sample = min(n_diff, 50)
     sample_interval = max(1, n_diff // n_coast_sample)
     progress_interval = max(1, n_pulses // 20)
@@ -209,8 +214,11 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         coast_gap = t_next_pulse_start - t_fine_end
 
         if coast_gap > 0:
-            # Set initial depth profile from post-pulse Teq
-            tz = deposit_pulse(tz, teq, exp_decay_z, box_mask_z, depth_is_exp)
+            # Set initial depth profile from the post-pulse layer energy
+            amp = (None if legacy_deposit else deposit_amplitude(
+                teq, tz[0], gamma, cl, leff, w_shape))
+            tz = deposit_pulse(tz, teq, exp_decay_z, box_mask_z, depth_is_exp,
+                               amplitude=amp)
 
             tz, c_t, c_tl = cn_coast_const(
                 tz, coast_gap, n_diff, alpha_l, dz, t0, t_fine_end, sample_interval

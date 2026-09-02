@@ -42,8 +42,9 @@ def test_against_matlab_fixture(case, tmp_path):
     fx = load_fixture(case)
     ref = fx["results"]
 
-    results = scanning_beam_solver(dict(fx["cfg"]), str(tmp_path),
-                                   save_plots=False)
+    # MATLAB fixtures pin the MATLAB deposit; see test_surface_point.py.
+    results = scanning_beam_solver({**fx["cfg"], "legacyDeposit": True},
+                                   str(tmp_path), save_plots=False)
 
     assert results["solverId"] == "scanning_beam"
     assert results["contractVersion"] == "v1"

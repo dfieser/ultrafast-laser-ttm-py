@@ -34,6 +34,8 @@ def _cfg_from_fixture(fx: dict, tmp_path) -> dict:
     cfg["outputDir"] = str(tmp_path)
     cfg["makePlots"] = False
     cfg["saveFigures"] = False
+    # MATLAB fixtures pin the MATLAB deposit; see test_surface_point.py.
+    cfg["legacyDeposit"] = True
     return cfg
 
 

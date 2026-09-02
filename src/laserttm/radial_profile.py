@@ -31,7 +31,9 @@ from .kernels import (
 )
 from .materials import k_model_name, k_table, resolve_material
 from .physics import (
+    deposit_amplitude,
     deposit_pulse,
+    deposit_shape_weight,
     depth_deposit_shape,
     derive_laser,
     equilibrate,
@@ -111,6 +113,9 @@ class _Setup:
     depth_is_exp: bool
     exp_decay_z: np.ndarray
     box_mask_z: np.ndarray
+    leff: float
+    w_shape: float
+    legacy_deposit: bool
     # Time stepping
     f_target: float
     n_diff: int
@@ -200,8 +205,10 @@ def _solve_scale(s: _Setup, st: _State, progress: ProgressReporter) -> None:
         coast_gap = t_next_start - t_fine_end
 
         if coast_gap > 0:
+            amp = (None if s.legacy_deposit else deposit_amplitude(
+                teq, tz[0], s.gamma, s.cl, s.leff, s.w_shape))
             tz = deposit_pulse(tz, teq, s.exp_decay_z, s.box_mask_z,
-                               s.depth_is_exp)
+                               s.depth_is_exp, amplitude=amp)
 
             n_diff_local = max(s.n_diff, int(np.ceil(
                 alpha_l * coast_gap / (f_target * dz**2))))
@@ -298,8 +305,11 @@ def _solve_independent(s: _Setup, st: _State, progress: ProgressReporter) -> Non
                 st.teq_vals[np_i] = teq
 
             # Deposit pulse energy into this node's depth profile
+            amp = (None if s.legacy_deposit else deposit_amplitude(
+                teq, tz_all[0, ri], s.gamma, s.cl, s.leff, s.w_shape))
             tz_all[:, ri] = deposit_pulse(tz_all[:, ri], teq, s.exp_decay_z,
-                                          s.box_mask_z, s.depth_is_exp)
+                                          s.box_mask_z, s.depth_is_exp,
+                                          amplitude=amp)
             te_all[ri] = teq
             tl_all[ri] = teq
 
@@ -495,6 +505,9 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     # Loop-invariant deposit shape (same precompute as scanning_beam)
     depth_is_exp = depth_profile == "exponential"
     exp_decay_z, box_mask_z = depth_deposit_shape(z_grid, leff)
+    legacy_deposit = bool(get_cfg_field(cfg, "legacyDeposit",
+                                        d["legacyDeposit"]))
+    w_shape = deposit_shape_weight(z_grid, leff, depth_is_exp)
 
     n_profile_snaps = min(n_pulses, 12)
     if n_pulses > 1:
@@ -518,6 +531,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         fluence_ratio=fluence_ratio,
         depth_is_exp=depth_is_exp, exp_decay_z=exp_decay_z,
         box_mask_z=box_mask_z,
+        leff=leff, w_shape=w_shape, legacy_deposit=legacy_deposit,
         f_target=f_target, n_diff=n_diff, n_diff_rad=n_diff_rad,
         dt_floor_abs=dt_floor_abs, pulse_fine_win=pulse_fine_win,
         relax_tol=relax_tol, relax_max_t=relax_max_t,

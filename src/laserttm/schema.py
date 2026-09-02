@@ -299,6 +299,17 @@ _CATALOG: tuple[ParamSpec, ...] = (
        "Keep the per-pulse time histories. False bounds memory on long "
        "runs and disables the timeline figures. Physics is unaffected.",
        default=True, group="run", affects_numerics=False),
+    _p("legacyDeposit", "bool",
+       "Reproduce the MATLAB reference deposit exactly. The default "
+       "deposit conserves the pulse energy on any grid, which the "
+       "reference does not once the grid is coarser than Leff.",
+       default=False, group="run",
+       notes="The legacy deposit raises the surface node to Teq and lets "
+             "the rise decay over Leff. On a grid with dz > 2*Leff that "
+             "injects roughly (dz/2)/Leff times the intended energy per "
+             "pulse and inflates heat accumulation. Set True only to "
+             "reproduce MATLAB toolbox output, as the golden-fixture "
+             "tests do."),
     _p("showProgress", "bool",
        "Show the progress window. None auto-detects a usable display.",
        default=None, group="run", affects_numerics=False),
@@ -386,7 +397,8 @@ _SURFACE_POINT = SolverSchema(
     params=_params(
         *_MATERIAL_LATTICE, "Pavg", "spotRadius", "f_rep", "tau_FWHM",
         "pulseProfile", "absorbance", "T0_C", "simDuration",
-        "Leff", "depthProfile", "dzTarget", "Ndiff", "storeHistory",
+        "Leff", "depthProfile", "dzTarget", "Ndiff", "legacyDeposit",
+        "storeHistory",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
         kl=_KL_TOTAL, kTable=_KTABLE_INERT, T_melt_C=_TMELT_INERT,
         Pavg={"default": 1.0}, spotRadius={"default": 80e-6},
@@ -450,7 +462,7 @@ _RADIAL_PROFILE = SolverSchema(
         "pulseProfile", "absorbance", "T0_C", "simDuration",
         "Leff", "depthProfile", "dzTarget", "Ndiff", "Nr", "rMax_factor",
         "radialSolveMode", "earlyStopMeltRadius_um", "earlyStopT_melt_C",
-        "earlyStopCheckInterval", "storeHistory",
+        "earlyStopCheckInterval", "legacyDeposit", "storeHistory",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
         kl=_KL_TOTAL,
         simDuration={"default": 1e-3},
@@ -531,6 +543,7 @@ _SCANNING_BEAM = SolverSchema(
         *_MATERIAL_LATTICE, "Pavg", "spotRadius", "f_rep", "tau_FWHM",
         "pulseProfile", "absorbance", "T0_C", "v_scan", "scanLength",
         "Leff", "depthProfile", "dzTarget", "Ndiff", "NadiPerGap",
+        "legacyDeposit",
         "Nx", "Ny", "xPad", "yExtent",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
         kl=_KL_TOTAL, kTable=_KTABLE_INERT, T_melt_C=_TMELT_INERT,
