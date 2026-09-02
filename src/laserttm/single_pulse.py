@@ -14,16 +14,23 @@ from __future__ import annotations
 import os
 import time
 import warnings
-from datetime import datetime
 
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.sparse import bmat, diags
 
-from .config import get_cfg_field, safe_tag
+from .config import get_cfg_field
 from .kernels import profile_code, ttm_1d_rhs
 from .materials import k_table, resolve_material
 from .physics import derive_laser
+from .reporting import (
+    apply_case_tag,
+    case_tag,
+    filename_slug,
+    resolve_output_dir,
+    write_header,
+    write_xy_table,
+)
 from .schema import defaults as schema_defaults
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
@@ -316,27 +323,14 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
     print("============================================================\n")
 
     # ==================  Export results to file  ============================
-    default_out = os.path.join(os.getcwd(), "outputs")
-    output_dir = get_cfg_field(cfg, "outputDir", default_out)
-    os.makedirs(output_dir, exist_ok=True)
-
-    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
-    freq_str = (f"{frep_v:.4g}_{frep_u}").replace(".", "p")
-    pulse_str = (f"{tau_v:.4g}_{tau_u}").replace(".", "p")
-    power_str = (f"{pavg:.4g}_W").replace(".", "p")
-    spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
-    out_filename = (f"TTM1D_{freq_str}_{pulse_str}_{power_str}_{spot_str}_"
-                    f"{n_pulses}p_{pulse_profile_name}.txt")
-    if case_tag:
-        out_filename = f"{case_tag}__{out_filename}"
+    output_dir = resolve_output_dir(cfg)
+    out_filename = apply_case_tag(cfg, (
+        f"TTM1D_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
+        f"{n_pulses}p_{pulse_profile_name}.txt"))
     out_path = os.path.join(output_dir, out_filename)
 
     with open(out_path, "w", encoding="utf-8") as fid:
-        fid.write("============================================================\n")
-        fid.write("  1D TTM Pulsed Laser Calculator — Output\n")
-        # Local wall-clock on purpose, matching the MATLAB reference output
-        fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
-        fid.write("============================================================\n\n")
+        write_header(fid, "1D TTM Pulsed Laser Calculator — Output")
         fid.write(f"--- Material:  {str(material).upper()} ---\n")
         fid.write(f"  gamma  = {gamma:.2f}  J m^-3 K^-2\n")
         fid.write(f"  Cl     = {cl:.4e}  J m^-3 K^-1\n")
@@ -371,13 +365,13 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
         fid.writelines(f"  Pulse {p + 1}:  Te_peak = {te_peak_per_pulse[p] - 273.15:.0f} degC,  "
                       f"Tl_peak = {tl_peak_per_pulse[p] - 273.15:.0f} degC,  "
                       f"Tresid = {tresid_per_pulse[p] - 273.15:.1f} degC\n" for p in range(n_pulses))
-        fid.write("\n============================================================\n")
-        fid.write("  Surface XY Data: Time (s) | Te_surf (degC) | Tl_surf (degC)\n")
-        fid.write("============================================================\n")
-        fid.write(f"{'Time_s':>20}  {'Te_surf_degC':>16}  {'Tl_surf_degC':>16}\n")
-        fid.writelines(
-            f"{all_times[i]:20.12e}  {all_te_surf[i] - 273.15:16.6f}  "
-            f"{all_tl_surf[i] - 273.15:16.6f}\n" for i in range(all_times.size))
+        fid.write("\n")
+        write_xy_table(
+            fid,
+            "  Surface XY Data: Time (s) | Te_surf (degC) | Tl_surf (degC)",
+            ("Time_s", "Te_surf_degC", "Tl_surf_degC"),
+            ((all_times[i], all_te_surf[i] - 273.15,
+              all_tl_surf[i] - 273.15) for i in range(all_times.size)))
     print(f"  Output written to: {out_path}\n")
 
     if make_plots:
@@ -394,7 +388,8 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
             tau_v=tau_v, tau_u=tau_u, spot_v=spot_v, spot_u=spot_u,
             f_peak=f_peak, absorbance=absorbance, n_pulses=n_pulses,
             te_peak_all=te_peak_all, tl_peak_all=tl_peak_all, max_inv=max_inv,
-            save_dir=(output_dir if save_figures else None), case_tag=case_tag)
+            save_dir=(output_dir if save_figures else None),
+            case_tag=case_tag(cfg))
 
     print("Done.")
 

@@ -16,16 +16,16 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
 
 import numpy as np
 from scipy.io import savemat
 
-from .config import get_cfg_field, safe_tag
+from .config import get_cfg_field
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
 from .materials import resolve_material
 from .physics import derive_laser, equilibrate
 from .progress import ProgressReporter
+from .reporting import apply_case_tag, filename_slug, write_header
 from .schema import defaults as schema_defaults
 from .schema import require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
@@ -209,24 +209,14 @@ def scanning_beam_solver(params: dict | None = None,
     # ==================  Save text output  ==================================
     os.makedirs(output_dir, exist_ok=True)
 
-    freq_str = (f"{frep_v:.4g}_{frep_u}").replace(".", "p")
-    pulse_str = (f"{tau_v:.4g}_{tau_u}").replace(".", "p")
-    power_str = (f"{pavg:.4g}_W").replace(".", "p")
-    spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
     scan_str = (f"{v_scan:.3g}_mps").replace(".", "p")
-    base_name = (f"TTMmov_{freq_str}_{pulse_str}_{power_str}_{spot_str}_"
-                 f"{scan_str}_{n_pulses}p")
-    case_tag = safe_tag(get_cfg_field(params, "caseTag", ""))
-    if case_tag:
-        base_name = f"{case_tag}__{base_name}"
+    base_name = apply_case_tag(params, (
+        f"TTMmov_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
+        f"{scan_str}_{n_pulses}p"))
 
     out_path = os.path.join(output_dir, base_name + ".txt")
     with open(out_path, "w", encoding="utf-8") as fid:
-        fid.write("============================================================\n")
-        fid.write("  Moving Laser TTM — Output\n")
-        # Local wall-clock on purpose, matching the MATLAB reference output
-        fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
-        fid.write("============================================================\n\n")
+        write_header(fid, "Moving Laser TTM — Output")
         fid.write(f"--- Material: {str(params['material']).upper()} ---\n")
         fid.write(f"  gamma = {gamma:.2f}  J m^-3 K^-2\n")
         fid.write(f"  Cl    = {cl:.4e}  J m^-3 K^-1\n")

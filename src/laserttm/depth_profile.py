@@ -18,13 +18,12 @@ from __future__ import annotations
 import os
 import time
 import warnings
-from datetime import datetime
 
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.sparse import bmat, diags
 
-from .config import get_cfg_field, safe_tag
+from .config import get_cfg_field
 from .kernels import (
     cn_coast_kt,
     k_hybrid,
@@ -34,6 +33,15 @@ from .kernels import (
 from .materials import k_model_name, k_table, resolve_material
 from .physics import bath_energy_density, derive_laser, equilibrium_temperature
 from .progress import ProgressReporter
+from .reporting import (
+    NO_HISTORY_NOTE,
+    apply_case_tag,
+    case_tag,
+    filename_slug,
+    resolve_output_dir,
+    write_header,
+    write_xy_table,
+)
 from .schema import defaults as schema_defaults
 from .schema import require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
@@ -615,27 +623,14 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     print("============================================================\n")
 
     # ==================  Export results to file  ============================
-    default_out = os.path.join(os.getcwd(), "outputs")
-    output_dir = get_cfg_field(cfg, "outputDir", default_out)
-    os.makedirs(output_dir, exist_ok=True)
-
-    freq_str = (f"{frep_v:.4g}_{frep_u}").replace(".", "p")
-    pulse_str = (f"{tau_v:.4g}_{tau_u}").replace(".", "p")
-    power_str = (f"{pavg:.4g}_W").replace(".", "p")
-    spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
-    out_filename = (f"TTM_1D_Result_{freq_str}_{pulse_str}_{power_str}_"
-                    f"{spot_str}_{n_pulses}p_{pulse_profile_name}.txt")
-    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
-    if case_tag:
-        out_filename = f"{case_tag}__{out_filename}"
+    output_dir = resolve_output_dir(cfg)
+    out_filename = apply_case_tag(cfg, (
+        f"TTM_1D_Result_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
+        f"{n_pulses}p_{pulse_profile_name}.txt"))
     out_path = os.path.join(output_dir, out_filename)
 
     with open(out_path, "w", encoding="utf-8") as fid:
-        fid.write("============================================================\n")
-        fid.write("  1D TTM Pulsed Laser Calculator — Output\n")
-        # Local wall-clock on purpose, matching the MATLAB reference output
-        fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
-        fid.write("============================================================\n\n")
+        write_header(fid, "1D TTM Pulsed Laser Calculator — Output")
         fid.write(f"--- Material:  {str(material).upper()} ---\n")
         fid.write(f"  gamma  = {gamma:.2f}  J m^-3 K^-2\n")
         fid.write(f"  Cl     = {cl:.4e}  J m^-3 K^-1\n")
@@ -677,16 +672,15 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
             fid.write(f"  Pulse {p + 1}: Teq={teq_vals[p] - 273.15:.2f} degC, "
                       f"Tresid={tresid_vals[p] - 273.15:.2f} degC\n")
         if store_history:
-            fid.write("\n============================================================\n")
-            fid.write("  Surface XY Data: Time (s) | Te_surf (degC) | Tl_surf (degC)\n")
-            fid.write("============================================================\n")
-            fid.write(f"{'Time_s':>20}  {'Te_surf_degC':>16}  {'Tl_surf_degC':>16}\n")
-            fid.writelines(
-                f"{all_times[i]:20.12e}  {all_te_surf[i] - 273.15:16.6f}  "
-                f"{all_tl_surf[i] - 273.15:16.6f}\n" for i in range(all_times.size))
+            fid.write("\n")
+            write_xy_table(
+                fid,
+                "  Surface XY Data: Time (s) | Te_surf (degC) | Tl_surf (degC)",
+                ("Time_s", "Te_surf_degC", "Tl_surf_degC"),
+                ((all_times[i], all_te_surf[i] - 273.15,
+                  all_tl_surf[i] - 273.15) for i in range(all_times.size)))
         else:
-            fid.write("\n  storeHistory=False: the per-sample time series was "
-                      "not retained,\n  so no XY table is written.\n")
+            fid.write("\n" + NO_HISTORY_NOTE)
     print(f"  Output written to: {out_path}\n")
 
     # The radial view is part of the solution, not a figure. Computing it
@@ -725,7 +719,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
             mx_v=(mx_v if inv_detected else 0.0),
             mx_u=(mx_u if inv_detected else ""),
             save_dir=(output_dir if save_figures else None),
-            case_tag=case_tag)
+            case_tag=case_tag(cfg))
 
     print("Done.")
 

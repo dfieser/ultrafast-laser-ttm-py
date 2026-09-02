@@ -17,11 +17,10 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from datetime import datetime
 
 import numpy as np
 
-from .config import get_cfg_field, safe_tag
+from .config import get_cfg_field
 from .kernels import (
     cn_coast_kt,
     cn_depth_multi_kt,
@@ -38,6 +37,12 @@ from .physics import (
     equilibrate,
 )
 from .progress import ProgressReporter
+from .reporting import (
+    apply_case_tag,
+    filename_slug,
+    resolve_output_dir,
+    write_header,
+)
 from .schema import defaults as schema_defaults
 from .schema import require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
@@ -604,29 +609,16 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     print("============================================================\n")
 
     # ==================  Export results  ====================================
-    default_out = os.path.join(os.getcwd(), "outputs")
-    output_dir = get_cfg_field(cfg, "outputDir", default_out)
-    os.makedirs(output_dir, exist_ok=True)
-
-    freq_str = (f"{frep_v:.4g}_{frep_u}").replace(".", "p")
-    pulse_str = (f"{tau_v:.4g}_{tau_u}").replace(".", "p")
-    power_str = (f"{pavg:.4g}_W").replace(".", "p")
-    spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
-    out_filename = (f"TTM_Radial_Result_{freq_str}_{pulse_str}_{power_str}_"
-                    f"{spot_str}_{n_pulses}p_{pulse_profile_name}.txt")
-    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
-    if case_tag:
-        out_filename = f"{case_tag}__{out_filename}"
+    output_dir = resolve_output_dir(cfg)
+    out_filename = apply_case_tag(cfg, (
+        f"TTM_Radial_Result_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
+        f"{n_pulses}p_{pulse_profile_name}.txt"))
     out_path = os.path.join(output_dir, out_filename)
 
     final_radial_t = tresid_radial[-1, :]
     with open(out_path, "w", encoding="utf-8") as fid:
-        fid.write("============================================================\n")
-        fid.write("  Radial Surface TTM Calculator — Output\n")
-        # Local wall-clock on purpose, matching the MATLAB reference output
-        fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
-        fid.write(f"  Mode: {radial_solve_mode}\n")
-        fid.write("============================================================\n\n")
+        write_header(fid, "Radial Surface TTM Calculator — Output",
+                     f"  Mode: {radial_solve_mode}")
         fid.write(f"--- Material: {str(material).upper()} ---\n")
         fid.write(f"  gamma = {gamma:.2f}  J m^-3 K^-2\n")
         fid.write(f"  Cl    = {cl:.4e}  J m^-3 K^-1\n")

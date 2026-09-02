@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
 
 import numpy as np
 
-from .config import get_cfg_field, safe_tag
+from .config import get_cfg_field
 from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
 from .materials import resolve_material
 from .physics import (
@@ -28,6 +27,14 @@ from .physics import (
     equilibrate,
 )
 from .progress import ProgressReporter
+from .reporting import (
+    NO_HISTORY_NOTE,
+    apply_case_tag,
+    filename_slug,
+    resolve_output_dir,
+    write_header,
+    write_xy_table,
+)
 from .schema import defaults as schema_defaults
 from .schema import require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
@@ -402,32 +409,20 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     print("============================================================\n")
 
     # ==================  Export results to file  ============================
-    default_out = os.path.join(os.getcwd(), "outputs")
-    output_dir = get_cfg_field(cfg, "outputDir", default_out)
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = resolve_output_dir(cfg)
 
     frep_val, frep_unit = smart_freq(f_rep)
     tau_val, tau_unit = smart_time(tau_fwhm)
     ep_val, ep_unit = smart_energy(ep_calc)
     spot_val, spot_unit = smart_length(spot_radius)
-    freq_str = (f"{frep_val:.4g}_{frep_unit}").replace(".", "p")
-    pulse_str = (f"{tau_val:.4g}_{tau_unit}").replace(".", "p")
-    power_str = (f"{pavg:.4g}_W").replace(".", "p")
-    spot_str = (f"{spot_val:.4g}_{spot_unit}").replace(".", "p")
-    out_filename = (f"TTM_{freq_str}_{pulse_str}_{power_str}_{spot_str}_"
-                    f"{n_pulses}p_{pulse_profile_name}.txt")
-    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
-    if case_tag:
-        out_filename = f"{case_tag}__{out_filename}"
+    out_filename = apply_case_tag(cfg, (
+        f"TTM_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
+        f"{n_pulses}p_{pulse_profile_name}.txt"))
     out_path = os.path.join(output_dir, out_filename)
 
     leff_val, leff_unit = smart_length(leff)
     with open(out_path, "w", encoding="utf-8") as fid:
-        fid.write("============================================================\n")
-        fid.write("  Surface TTM Pulsed Laser Calculator — Output\n")
-        # Local wall-clock on purpose, matching the MATLAB reference output
-        fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
-        fid.write("============================================================\n\n")
+        write_header(fid, "Surface TTM Pulsed Laser Calculator — Output")
 
         fid.write("--- Laser Parameters ---\n")
         fid.write(f"  Average Power:         {pavg:.4g} W\n")
@@ -472,17 +467,12 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         fid.write("\n")
 
         if store_history:
-            fid.write("============================================================\n")
-            fid.write("  XY Data: Time (s) | Te (deg C) | Tl (deg C)\n")
-            fid.write("============================================================\n")
-            fid.write(f"{'Time_s':>20}  {'Te_degC':>16}  {'Tl_degC':>16}\n")
-            fid.writelines(
-                f"{times[i]:20.12e}  {te_c[i]:16.6f}  {tl_c[i]:16.6f}\n"
-                for i in range(nt)
-            )
+            write_xy_table(
+                fid, "  XY Data: Time (s) | Te (deg C) | Tl (deg C)",
+                ("Time_s", "Te_degC", "Tl_degC"),
+                ((times[i], te_c[i], tl_c[i]) for i in range(nt)))
         else:
-            fid.write("  storeHistory=False: the per-sample time series was "
-                      "not retained,\n  so no XY table is written.\n")
+            fid.write(NO_HISTORY_NOTE)
     print(f"  Output written to: {out_path}")
 
     results = {

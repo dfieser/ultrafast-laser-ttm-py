@@ -42,6 +42,7 @@ are user visible.
 | `config.py` | MATLAB `getCfgField` semantics: missing, None and empty fall back to the default. |
 | `physics.py` | The shared closed-form identities: two-bath energetics, the pulse deposit, derived pulse-train quantities. One home each, so a correction lands everywhere at once. |
 | `kernels.py` | Numba-jitted numerics, line-faithful to MATLAB. Treat as frozen. |
+| `reporting.py` | The report-file conventions: output directory, filename slug, caseTag prefix, banner header, XY table. The basenames tests assert are built here. |
 | `runtools.py` | Solver registry and result serialization. |
 | `cli.py`, `mcp_server.py` | The two machine-facing front ends. |
 | `plotting.py`, `progress.py`, `units.py` | Figures, the progress window, display-unit selection. |

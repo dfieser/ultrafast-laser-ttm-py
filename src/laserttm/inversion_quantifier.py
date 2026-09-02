@@ -10,33 +10,26 @@ the v1 result contract match the MATLAB solver field-for-field.
 from __future__ import annotations
 
 import os
-from datetime import datetime
 
 import numpy as np
 
-from .config import get_cfg_field, safe_tag
+from .config import get_cfg_field
 from .depth_profile import depth_profile_solver
+from .reporting import (
+    apply_case_tag,
+    filename_slug,
+    resolve_output_dir,
+    write_header,
+)
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 
 def _resolve_out_path(cfg, f_rep, tau_fwhm, pavg, spot_radius, n_pulses):
     """Output directory and report path, shared by both result branches."""
-    default_out = os.path.join(os.getcwd(), "outputs")
-    output_dir = get_cfg_field(cfg, "outputDir", default_out)
-    os.makedirs(output_dir, exist_ok=True)
-
-    frep_v, frep_u = smart_freq(f_rep)
-    tau_v, tau_u = smart_time(tau_fwhm)
-    spot_v, spot_u = smart_length(spot_radius)
-    freq_str = (f"{frep_v:.4g}_{frep_u}").replace(".", "p")
-    pulse_str = (f"{tau_v:.4g}_{tau_u}").replace(".", "p")
-    power_str = (f"{pavg:.4g}_W").replace(".", "p")
-    spot_str = (f"{spot_v:.4g}_{spot_u}").replace(".", "p")
-    out_filename = (f"Inversion_Analysis_{freq_str}_{pulse_str}_{power_str}_"
-                    f"{spot_str}_{n_pulses}p.txt")
-    case_tag = safe_tag(get_cfg_field(cfg, "caseTag", ""))
-    if case_tag:
-        out_filename = f"{case_tag}__{out_filename}"
+    output_dir = resolve_output_dir(cfg)
+    out_filename = apply_case_tag(cfg, (
+        f"Inversion_Analysis_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
+        f"{n_pulses}p.txt"))
     return output_dir, os.path.join(output_dir, out_filename)
 
 
@@ -117,11 +110,7 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
         output_dir, out_path = _resolve_out_path(
             cfg, f_rep, tau_fwhm, pavg, spot_radius, n_pulses)
         with open(out_path, "w", encoding="utf-8") as fid:
-            fid.write("=" * 60 + "\n")
-            fid.write("  Temperature Inversion Quantifier — Output\n")
-            # Local wall-clock on purpose, matching the MATLAB reference
-            fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
-            fid.write("=" * 60 + "\n\n")
+            write_header(fid, "Temperature Inversion Quantifier — Output")
             fid.write(f"--- Material: {str(material).upper()} ---\n\n")
             fid.write(f"  Pulses analyzed:  {n_pulses}\n")
             fid.write(f"  Pulses with inversion (Tl-Te > "
@@ -199,11 +188,7 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
     spot_v, spot_u = smart_length(spot_radius)
 
     with open(out_path, "w", encoding="utf-8") as fid:
-        fid.write("============================================================\n")
-        fid.write("  Temperature Inversion Quantifier — Output\n")
-        # Local wall-clock on purpose, matching the MATLAB reference output
-        fid.write(f"  Generated: {datetime.now():%Y-%m-%d %H:%M:%S}\n")  # noqa: DTZ005
-        fid.write("============================================================\n\n")
+        write_header(fid, "Temperature Inversion Quantifier — Output")
         fid.write(f"--- Material: {str(material).upper()} ---\n")
         fid.write(f"  gamma  = {gamma_mat:.2f}  J m^-3 K^-2\n")
         fid.write(f"  Cl     = {cl:.4e}  J m^-3 K^-1\n")
