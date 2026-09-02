@@ -116,3 +116,79 @@ def test_the_envelope_serializes(runs):
         payload = to_jsonable(
             {k: res[k] for k in ENVELOPE}, max_array=10)
         json.dumps(payload)  # must not raise
+
+
+def test_every_emitted_key_is_documented_and_vice_versa(runs):
+    """The registry in schema.py is the results contract, enforced.
+
+    A solver emitting a key with no registry row fails here, and so does
+    a registry row no solver honors. Gated rows may be absent when their
+    config key is off, which it is in these tiny runs.
+    """
+    from laserttm import schema
+
+    for solver_id, res in runs.items():
+        emitted = set(res)
+        rows = {f.name: f
+                for f in schema.RESULT_ENVELOPE + schema.RESULTS[solver_id]}
+
+        undocumented = emitted - set(rows)
+        assert not undocumented, (
+            f"{solver_id} returns undocumented keys: {sorted(undocumented)}. "
+            "Add a ResultField row in schema.py in the same commit.")
+
+        missing = {name for name, f in rows.items()
+                   if name not in emitted and f.gated_by is None}
+        assert not missing, (
+            f"{solver_id} does not return documented keys: "
+            f"{sorted(missing)}")
+
+
+def test_gated_keys_appear_when_their_gate_is_on(runs, tmp_path):
+    cfg = {"f_rep": FREP, "simDuration": DUR, "makePlots": False,
+           "outputDir": str(tmp_path), "enableRadialProfile": True}
+    res = _run("depth_profile", cfg)
+    from laserttm import schema
+    gated = {f.name for f in schema.RESULTS["depth_profile"]
+             if f.gated_by == "enableRadialProfile"}
+    assert gated <= set(res)
+    assert res["warnings"] == [] or all(
+        isinstance(w, str) for w in res["warnings"])
+
+
+def test_describe_results_and_the_solver_description():
+    from laserttm import schema
+
+    fields = schema.describe_results("depth_profile")
+    names = [f["name"] for f in fields]
+    assert names[0] == "solver"          # envelope first
+    assert "invMaxPerPulse_K" in names
+    by_name = {f["name"]: f for f in fields}
+    assert by_name["radialGrid_um"]["gatedBy"] == "enableRadialProfile"
+    assert by_name["gamma"]["prefer"] == "materialProps"
+
+    described = schema.describe_solver("single_pulse", section="results")
+    assert {f["name"] for f in described["results"]} == {
+        f.name for f in (schema.RESULT_ENVELOPE
+                         + schema.RESULTS["single_pulse"])}
+
+    with pytest.raises(KeyError):
+        schema.describe_results("no_such_solver")
+
+
+def test_the_contract_doc_is_current():
+    """docs/results-contract.md must be regenerated with registry edits."""
+    import importlib.util
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "generate_contract", root / "docs" / "generate_contract.py")
+    gen = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gen)
+
+    on_disk = (root / "docs" / "results-contract.md").read_text(
+        encoding="utf-8")
+    assert on_disk == gen.render(), (
+        "docs/results-contract.md is stale. Run "
+        "'python docs/generate_contract.py' and commit the result.")

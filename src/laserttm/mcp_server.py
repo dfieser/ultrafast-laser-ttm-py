@@ -210,11 +210,13 @@ def describe_solver(solver: str, section: str = "all") -> dict[str, Any]:
     """Everything a caller needs to drive one solver correctly.
 
     Returns every accepted config key with its type, unit, default, valid
-    range and meaning, plus the files the solver writes and runnable example
-    configs. Call this before composing a config for a solver you have not
-    used yet, rather than guessing key names or reading source.
+    range and meaning, every key the results dict will contain with its
+    unit, plus the files the solver writes and runnable example configs.
+    Call this before composing a config for a solver you have not used
+    yet, rather than guessing key names or reading source.
 
-    section limits the reply to 'inputs', 'files' or 'examples'.
+    section limits the reply to 'inputs', 'results', 'files' or
+    'examples'.
     """
     from . import schema
 

@@ -141,9 +141,10 @@ Overridable fields are `gamma`, `Cl`, `G`, `kl`, `ke0`, `alpha_opt` or `delta_op
 Every solver can describe itself, so nothing needs to be looked up in source:
 
 ```python
-from laserttm import describe_solver, validate_config
+from laserttm import describe_results, describe_solver, validate_config
 
 describe_solver("depth_profile")     # every key with unit, default and range
+describe_results("depth_profile")    # every results key with unit and meaning
 validate_config("depth_profile", cfg)  # check a config in milliseconds
 ```
 
@@ -162,9 +163,9 @@ The MATLAB repo's [project wiki](https://github.com/dfieser/ultrafast-laser-ttm-
 | Inversion analysis | [inversion_quantifier.py](src/laserttm/inversion_quantifier.py) | per-pulse inversion magnitude, onset, and duration statistics | quantifying the Tl > Te inversion across pulses |
 | Scanning beam | [scanning_beam.py](src/laserttm/scanning_beam.py) | 2D surface temperature under a moving beam | translating stationary results to a scanned process |
 
-All six return a results dict with the shared v1 contract fields: `solver`, `solverId`, `contractVersion`, `material`, `outputFile`, `outputDir`, and `inputConfig`, plus `nPulses` and `wallTime_s` where meaningful. The contract is identical to the MATLAB toolbox's.
+All six return a results dict with a shared envelope: `solver`, `solverId`, `contractVersion`, `material`, `nPulses`, `wallTime_s`, `outputFile`, `outputDir`, `inputConfig`, plus `resolvedConfig` with the config actually in force, `materialProps` with the resolved material record, `warnings`, and `caseTag`. Every key each solver returns is documented in [docs/results-contract.md](docs/results-contract.md), generated from the same registry `describe_results` reads. Every MATLAB toolbox field carries over with its original spelling.
 
-**Long runs:** the radial solver accepts `storeHistory: False` to drop the per-pulse time histories, which are needed only for the timeline figures. This bounds memory for accumulation studies past 100,000 pulses while leaving every physical result unchanged.
+**Long runs:** the surface-point, depth and radial solvers accept `storeHistory: False` to drop the per-pulse time histories, which are needed only for the timeline figures and the report's XY table. This bounds memory for accumulation studies past 100,000 pulses while leaving every physical result unchanged.
 
 **Progress popup:** the multi-pulse solvers show a waitbar with a live time estimate during interactive runs, matching the MATLAB toolbox. Set `showProgress: True` or `False` in the config to force it either way. When unset, the popup appears only for terminal runs with a display, so test suites, batch pipelines, and the MCP server stay headless. Setting the `LASERTTM_NO_PROGRESS` environment variable also disables it.
 

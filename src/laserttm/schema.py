@@ -1,12 +1,13 @@
-"""Declarative registry of every solver input: the library's input contract.
+"""Declarative registry of the library's contract, inputs and results both.
 
 One table describes each config key once, with its unit, default, valid range
-and meaning, and records which solvers accept it. Everything else is derived:
-solver defaults, config validation, the generated documentation, the CLI's
+and meaning, and records which solvers accept it; a second set of tables
+describes every key each solver returns. Everything else is derived: solver
+defaults, config validation, the generated documentation, the CLI's
 ``describe``/``schema`` commands, and the MCP server's discovery tools.
 
 The point is that a caller, human or machine, can learn the complete input
-surface without reading solver source:
+and output surface without reading solver source:
 
     >>> from laserttm import describe_solver, validate_config
     >>> describe_solver("depth_profile")["params"]["spotRadius"]["unit"]
@@ -35,11 +36,16 @@ from typing import Any
 
 __all__ = [
     "PARAMS",
+    "RESULTS",
+    "RESULT_ENVELOPE",
     "SOLVER_IDS",
     "ParamSpec",
+    "ResultField",
     "SolverSchema",
     "defaults",
+    "describe_results",
     "describe_solver",
+    "effective_config",
     "estimate_run",
     "json_schema",
     "list_solvers",
@@ -563,9 +569,10 @@ def defaults(solver_id: str) -> dict[str, Any]:
 
 
 def describe_solver(solver_id: str, section: str = "all") -> dict[str, Any]:
-    """Full description of one solver: inputs, outputs, files, examples.
+    """Full description of one solver: inputs, results, files, examples.
 
-    ``section`` selects a subset: 'inputs', 'files', 'examples' or 'all'.
+    ``section`` selects a subset: 'inputs', 'results', 'files',
+    'examples' or 'all'.
     """
     sch = solver_schema(solver_id)
     out: dict[str, Any] = {
@@ -577,6 +584,8 @@ def describe_solver(solver_id: str, section: str = "all") -> dict[str, Any]:
     }
     if section in ("all", "inputs"):
         out["params"] = {n: s.as_dict() for n, s in sch.params.items()}
+    if section in ("all", "results"):
+        out["results"] = describe_results(sch.id)
     if section in ("all", "files"):
         out["files"] = list(sch.files)
     if section in ("all", "examples"):
@@ -598,6 +607,357 @@ def list_solvers() -> list[dict[str, Any]]:
         }
         for s in _SCHEMAS.values()
     ]
+
+
+# ===========================================================================
+# The results contract: every key a solver returns, described once.
+# ===========================================================================
+
+
+@dataclass(frozen=True)
+class ResultField:
+    """One results-dict key: what it holds, in what unit, when it appears."""
+
+    name: str
+    kind: str                # scalar | array | str | bool | dict | path | list
+    unit: str | None
+    summary: str
+    gated_by: str | None = None   # config key that must be enabled for it
+    prefer: str | None = None     # the newer spelling to reach for instead
+
+    def as_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"name": self.name, "kind": self.kind,
+                               "unit": self.unit, "summary": self.summary}
+        if self.gated_by:
+            out["gatedBy"] = self.gated_by
+        if self.prefer:
+            out["prefer"] = self.prefer
+        return out
+
+
+_r = ResultField
+
+# Keys present in every solver's results.
+RESULT_ENVELOPE: tuple[ResultField, ...] = (
+    _r("solver", "str", None, "Human-readable solver name."),
+    _r("solverId", "str", None, "The id used by run(), the CLI and MCP."),
+    _r("contractVersion", "str", None,
+       "Results-contract generation, 'v1' since the first release."),
+    _r("material", "str", None, "Material key as given in the config."),
+    _r("caseTag", "str", None,
+       "Sanitized caseTag echoed back, empty when unset."),
+    _r("resolvedConfig", "dict", None,
+       "The config actually in force: defaults overlaid with the caller's "
+       "values under the same empty-means-default semantics the solver "
+       "itself applies."),
+    _r("materialProps", "dict", None,
+       "The resolved material record: gamma, Cl, G, the two conductivity "
+       "terms spelled apart as kTotal_W_mK and kLattice_W_mK, optical "
+       "properties, melting point, and the conductivity model in use. "
+       "None only when a pre-0.1.22 depthResults dict was supplied."),
+    _r("warnings", "list", None,
+       "Validity warnings raised during the run, for consumers that never "
+       "see the console."),
+    _r("nPulses", "scalar", None, "Number of pulses simulated."),
+    _r("wallTime_s", "scalar", "s", "Wall-clock solve time."),
+    _r("outputFile", "path", None, "The text report written by this run."),
+    _r("outputDir", "path", None, "Directory holding every file written."),
+    _r("inputConfig", "dict", None,
+       "The caller's config exactly as passed, unmerged.",
+       prefer="resolvedConfig"),
+)
+
+# Keys specific to one solver, beyond the envelope.
+RESULTS: dict[str, tuple[ResultField, ...]] = {
+    "surface_point": (
+        _r("time_s", "array", "s",
+           "Sample times over the whole train; empty when storeHistory "
+           "is off."),
+        _r("Te_K", "array", "K", "Electron temperature at each sample."),
+        _r("Tl_K", "array", "K", "Lattice temperature at each sample."),
+        _r("Te_C", "array", "degC", "Electron temperature, Celsius."),
+        _r("Tl_C", "array", "degC", "Lattice temperature, Celsius."),
+        _r("peakPulse", "scalar", None,
+           "1-based pulse on which the electron peak occurred."),
+        _r("peakTe_C", "scalar", "degC", "Peak electron temperature."),
+        _r("peakTl_C", "scalar", "degC", "Peak lattice temperature."),
+        _r("finalTe_C", "scalar", "degC",
+           "Electron temperature at the last sample."),
+        _r("finalTl_C", "scalar", "degC",
+           "Lattice temperature at the last sample."),
+        _r("finalResid_C", "scalar", "degC",
+           "Residual surface temperature after the final inter-pulse "
+           "diffusion."),
+        _r("projectedSteadyState_C", "scalar", "degC",
+           "Steady-state baseline projected from the envelope fit."),
+        _r("nChar", "scalar", None,
+           "Characteristic pulse count of the baseline exponential; NaN "
+           "when the fit failed."),
+        _r("baselineFitRMSE_K", "scalar", "K",
+           "Root-mean-square error of the baseline fit; NaN when the fit "
+           "failed."),
+        _r("steadyStateReached_pct", "scalar", "%",
+           "Fraction of the projected steady-state reached by the last "
+           "pulse. NaN when the fit failed."),
+        _r("TeqVals_C", "array", "degC",
+           "Post-pulse equilibrium temperature, one per pulse."),
+        _r("TresidVals_C", "array", "degC",
+           "Residual temperature after each inter-pulse diffusion."),
+        _r("absorbedAreal_J_m2", "scalar", "J/m^2",
+           "Energy absorbed per unit area over the run."),
+        _r("depthEnergy_J_m2", "scalar", "J/m^2",
+           "Energy stored in the depth grid at the end."),
+        _r("energyMismatch_pct", "scalar", "%",
+           "Bookkeeping mismatch between the two; expected to be nonzero "
+           "in this hybrid 0D+1D model."),
+        _r("makePlots", "bool", None, "Echo of the plotting switch.",
+           prefer="resolvedConfig"),
+        _r("saveFigures", "bool", None, "Echo of the figure switch.",
+           prefer="resolvedConfig"),
+        _r("figureFile", "path", None, "The saved timeline figure.",
+           gated_by="makePlots"),
+    ),
+    "depth_profile": (
+        _r("peakPulse", "scalar", None,
+           "1-based pulse on which the electron peak occurred."),
+        _r("peakTe_C", "scalar", "degC", "Peak surface electron temperature."),
+        _r("peakTl_C", "scalar", "degC", "Peak surface lattice temperature."),
+        _r("finalResid_C", "scalar", "degC",
+           "Residual surface temperature after the final diffusion."),
+        _r("invDetected", "bool", None,
+           "Whether any surface inversion (Tl > Te) exceeded the "
+           "threshold."),
+        _r("maxInv_K", "scalar", "K",
+           "Largest surface Tl - Te over the run. Zero when none."),
+        _r("invThreshold_K", "scalar", "K",
+           "Threshold above which Tl - Te counts as an inversion."),
+        _r("absorbedAreal_J_m2", "scalar", "J/m^2",
+           "Energy absorbed per unit area over the run."),
+        _r("depthEnergy_J_m2", "scalar", "J/m^2",
+           "Energy stored in the diffusion grid at the end."),
+        _r("energyMismatch_pct", "scalar", "%",
+           "Bookkeeping mismatch between the two; expected in the hybrid "
+           "fine+coarse model."),
+        _r("TePeakPerPulse_C", "array", "degC",
+           "Peak surface electron temperature, one per pulse."),
+        _r("TlPeakPerPulse_C", "array", "degC",
+           "Peak surface lattice temperature, one per pulse."),
+        _r("TeqVals_C", "array", "degC",
+           "Post-pulse equilibrium temperature, one per pulse."),
+        _r("TresidVals_C", "array", "degC",
+           "Residual temperature after each inter-pulse diffusion."),
+        _r("baseTempPerPulse_C", "array", "degC",
+           "Baseline temperature each pulse started from."),
+        _r("invMaxPerPulse_K", "array", "K",
+           "Largest surface Tl - Te within each pulse."),
+        _r("tMaxInvPerPulse_s", "array", "s",
+           "Time of the largest inversion, relative to each pulse centre; "
+           "NaN where none."),
+        _r("tInvOnsetPerPulse_s", "array", "s",
+           "Inversion onset time relative to each pulse centre; NaN where "
+           "none."),
+        _r("invDurationPerPulse_s", "array", "s",
+           "How long the inversion lasted in each pulse. Zero where none."),
+        _r("Te_atMaxInvPerPulse_C", "array", "degC",
+           "Electron temperature at the moment of largest inversion; NaN "
+           "where none."),
+        _r("Tl_atMaxInvPerPulse_C", "array", "degC",
+           "Lattice temperature at the moment of largest inversion; NaN "
+           "where none."),
+        _r("f_rep", "scalar", "Hz", "Echo of the repetition rate.",
+           prefer="resolvedConfig"),
+        _r("Pavg", "scalar", "W", "Echo of the average power.",
+           prefer="resolvedConfig"),
+        _r("tau_FWHM", "scalar", "s", "Echo of the pulse width.",
+           prefer="resolvedConfig"),
+        _r("spotRadius", "scalar", "m", "Echo of the spot radius.",
+           prefer="resolvedConfig"),
+        _r("absorbance", "scalar", None, "Echo of the absorbance.",
+           prefer="resolvedConfig"),
+        _r("T0_C", "scalar", "degC", "Echo of the initial temperature.",
+           prefer="resolvedConfig"),
+        _r("F_peak", "scalar", "J/m^2", "Peak fluence at beam centre."),
+        _r("gamma", "scalar", "J/(m^3 K^2)",
+           "Electron heat-capacity coefficient used.",
+           prefer="materialProps"),
+        _r("Cl", "scalar", "J/(m^3 K)", "Lattice heat capacity used.",
+           prefer="materialProps"),
+        _r("G", "scalar", "W/(m^3 K)", "Electron-phonon coupling used.",
+           prefer="materialProps"),
+        _r("ke0", "scalar", "W/(m K)",
+           "Electron conductivity coefficient used.",
+           prefer="materialProps"),
+        _r("kl", "scalar", "W/(m K)",
+           "Lattice conductivity term used; the lattice-only share here, "
+           "unlike the total the 0D solvers call kl.",
+           prefer="materialProps"),
+        _r("alpha_opt", "scalar", "1/m",
+           "Optical absorption coefficient used.", prefer="materialProps"),
+        _r("Trep", "scalar", "s", "Pulse period, 1/f_rep."),
+        _r("simDuration", "scalar", "s", "Simulated duration.",
+           prefer="resolvedConfig"),
+        _r("radialGrid_um", "array", "um",
+           "Radial positions of the scaled view.",
+           gated_by="enableRadialProfile"),
+        _r("radialFluenceRatio", "array", None,
+           "Gaussian fluence ratio at each radius.",
+           gated_by="enableRadialProfile"),
+        _r("radialSurfaceProfiles_C", "array", "degC",
+           "Surface temperature versus radius at each snapshot pulse.",
+           gated_by="enableRadialProfile"),
+        _r("crossSection_C", "array", "degC",
+           "Depth-by-radius temperature map at the last snapshot.",
+           gated_by="enableRadialProfile"),
+        _r("lateralDiffusionLength_m", "scalar", "m",
+           "Lateral diffusion length the radial scaling assumes small.",
+           gated_by="enableRadialProfile"),
+    ),
+    "radial_profile": (
+        _r("mode", "str", None,
+           "Which radial algorithm ran: 'scale' or 'independent'."),
+        _r("nPulsesRequested", "scalar", None,
+           "Pulses the config asked for. nPulses is what actually ran."),
+        _r("earlyStopped", "bool", None,
+           "True when the melt-radius early stop ended the run before "
+           "nPulsesRequested."),
+        _r("peakTeq_C", "scalar", "degC",
+           "Largest post-pulse equilibrium temperature at beam centre."),
+        _r("finalResid_C", "scalar", "degC",
+           "Residual centre temperature after the final diffusion."),
+        _r("TeqVals_C", "array", "degC",
+           "Post-pulse equilibrium temperature at centre, one per pulse."),
+        _r("TresidVals_C", "array", "degC",
+           "Residual centre temperature after each inter-pulse diffusion."),
+        _r("rGrid_um", "array", "um", "Radial grid positions."),
+        _r("finalRadialProfile_C", "array", "degC",
+           "Residual surface temperature versus radius after the last "
+           "pulse."),
+        _r("spotRadius_um", "scalar", "um", "Echo of the spot radius.",
+           prefer="resolvedConfig"),
+    ),
+    "single_pulse": (
+        _r("peakTe_C", "scalar", "degC", "Peak surface electron temperature."),
+        _r("peakTl_C", "scalar", "degC", "Peak surface lattice temperature."),
+        _r("finalTe_C", "scalar", "degC",
+           "Surface electron temperature at the end."),
+        _r("finalTl_C", "scalar", "degC",
+           "Surface lattice temperature at the end."),
+        _r("finalResid_C", "scalar", "degC",
+           "Same value as finalTl_C, under the cross-solver name."),
+        _r("invDetected", "bool", None,
+           "Whether the surface inversion exceeded the threshold."),
+        _r("maxInv_C", "scalar", "K",
+           "Largest surface Tl - Te; a temperature difference despite the "
+           "historical _C spelling.", prefer="maxInv_K"),
+        _r("maxInv_K", "scalar", "K",
+           "Largest surface Tl - Te. Zero when none."),
+        _r("invThreshold_K", "scalar", "K",
+           "Threshold above which Tl - Te counts as an inversion."),
+        _r("tInvOnset_s", "scalar", "s",
+           "Inversion onset relative to the pulse centre. NaN when none."),
+        _r("tMaxInv_s", "scalar", "s",
+           "Time of the largest inversion relative to the pulse centre; "
+           "NaN when none."),
+        _r("absorbedAreal_J_m2", "scalar", "J/m^2",
+           "Energy absorbed per unit area."),
+        _r("depthEnergy_J_m2", "scalar", "J/m^2",
+           "Energy stored in the depth grid at the end."),
+        _r("energyMismatch_pct", "scalar", "%",
+           "Bookkeeping mismatch between the two."),
+    ),
+    "scanning_beam": (
+        _r("Tpeak_map", "array", "K",
+           "Peak temperature ever reached at each surface point."),
+        _r("Tsurf", "array", "K", "Final surface temperature map."),
+        _r("peakT_history", "array", "K",
+           "Peak surface temperature after each pulse."),
+        _r("xGrid", "array", "m", "Surface grid x positions."),
+        _r("yGrid", "array", "m", "Surface grid y positions."),
+        _r("peakT_C", "scalar", "degC",
+           "Largest temperature anywhere on the map."),
+        _r("pulseSpacing", "scalar", "m",
+           "Distance the beam moves between pulses, v_scan/f_rep."),
+        _r("simDuration_s", "scalar", "s",
+           "Scan duration, scanLength/v_scan."),
+        _r("wallTime", "scalar", "s", "Same value as wallTime_s.",
+           prefer="wallTime_s"),
+        _r("dTeq_single", "scalar", "K",
+           "Single-pulse equilibrium temperature rise used by the "
+           "superposition."),
+        _r("params", "dict", None,
+           "The defaults-merged parameter dict this solver ran from.",
+           prefer="resolvedConfig"),
+        _r("outPath", "path", None, "Same value as outputFile.",
+           prefer="outputFile"),
+        _r("matPath", "path", None,
+           "MATLAB-compatible .mat with the surface maps."),
+    ),
+    "inversion_quantifier": (
+        _r("nInvPulses", "scalar", None,
+           "Pulses whose inversion exceeded the threshold."),
+        _r("invThreshold_K", "scalar", "K",
+           "Threshold above which Tl - Te counts as an inversion."),
+        _r("meanInv_K", "scalar", "K",
+           "Mean of the per-pulse maximum inversions. NaN when none."),
+        _r("maxInv_K", "scalar", "K", "Largest inversion in any pulse."),
+        _r("minInv_K", "scalar", "K",
+           "Smallest inversion among inverted pulses."),
+        _r("stdInv_K", "scalar", "K",
+           "Standard deviation of the per-pulse maxima."),
+        _r("invSlope_KperPulse", "scalar", "K/pulse",
+           "Linear trend of inversion magnitude across the train."),
+        _r("corrBaseTempInv", "scalar", None,
+           "Correlation between baseline temperature and inversion "
+           "magnitude. NaN below 3 inverted pulses."),
+        _r("meanInvFraction", "scalar", None,
+           "Mean inversion as a fraction of the electron excursion."),
+        _r("invMaxPerPulse_K", "array", "K",
+           "Largest surface Tl - Te within each pulse."),
+        _r("TePeak_C", "array", "degC",
+           "Peak surface electron temperature, one per pulse."),
+        _r("TlPeak_C", "array", "degC",
+           "Peak surface lattice temperature, one per pulse."),
+        _r("Tbase_C", "array", "degC",
+           "Baseline temperature each pulse started from."),
+        _r("Teq_C", "array", "degC",
+           "Post-pulse equilibrium temperature, one per pulse."),
+        _r("Tresid_C", "array", "degC",
+           "Residual temperature after each inter-pulse diffusion."),
+        _r("tMaxInv_s", "array", "s",
+           "Time of the largest inversion per pulse. NaN where none."),
+        _r("tOnset_s", "array", "s",
+           "Inversion onset per pulse. NaN where none."),
+        _r("invDuration_s", "array", "s",
+           "Inversion duration per pulse. Zero where none."),
+        _r("Te_atMaxInv_C", "array", "degC",
+           "Electron temperature at the largest inversion; NaN where "
+           "none."),
+        _r("Tl_atMaxInv_C", "array", "degC",
+           "Lattice temperature at the largest inversion. NaN where none."),
+        _r("peakTe_C", "scalar", "degC",
+           "Peak surface electron temperature, from the depth run."),
+        _r("peakTl_C", "scalar", "degC",
+           "Peak surface lattice temperature, from the depth run."),
+        _r("finalResid_C", "scalar", "degC",
+           "Final residual temperature, from the depth run."),
+        _r("depthResults", "dict", None,
+           "The full depth_profile results this analysis ran on."),
+        _r("depthOutputFile", "path", None,
+           "The depth run's own text report."),
+    ),
+}
+
+
+def describe_results(solver_id: str) -> list[dict[str, Any]]:
+    """Every key in one solver's results dict, with unit and meaning.
+
+    The shared envelope comes first, then the solver's own fields. A
+    ``gatedBy`` entry names the config key that must be enabled for the
+    field to appear; ``prefer`` points at the newer spelling of a value
+    kept for compatibility.
+    """
+    sch = solver_schema(solver_id)
+    return [f.as_dict() for f in RESULT_ENVELOPE + RESULTS[sch.id]]
 
 
 def _matlab_round(x: float) -> int:

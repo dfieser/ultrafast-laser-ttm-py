@@ -84,6 +84,19 @@ def _cmd_describe(args: argparse.Namespace) -> int:
             if spec.get("notes"):
                 print(f"      note: {spec['notes']}")
 
+    result_fields = described.get("results")
+    if result_fields:
+        print(f"\nResults keys ({len(result_fields)}):")
+        for spec in result_fields:
+            unit = f" [{spec['unit']}]" if spec.get("unit") else ""
+            flags = ""
+            if spec.get("gatedBy"):
+                flags += f"  (needs {spec['gatedBy']})"
+            if spec.get("prefer"):
+                flags += f"  (prefer {spec['prefer']})"
+            print(f"\n  {spec['name']}{unit}  {spec['kind']}{flags}")
+            print(f"      {spec['summary']}")
+
     if described.get("files"):
         print("\nWrites: " + ", ".join(described["files"]))
     for label, example in (described.get("examples") or {}).items():
@@ -254,7 +267,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="show a solver's config keys, units, defaults and ranges")
     p_desc.add_argument("solver", help="solver id (see 'laserttm list')")
     p_desc.add_argument("--section", default="all",
-                        choices=["all", "inputs", "files", "examples"],
+                        choices=["all", "inputs", "results", "files",
+                                 "examples"],
                         help="limit the output to one section")
     p_desc.add_argument("--json", action="store_true", help="emit JSON")
     p_desc.set_defaults(func=_cmd_describe)

@@ -37,7 +37,7 @@ are user visible.
 
 | Module | Owns |
 | --- | --- |
-| `schema.py` | The input contract. Every config key with unit, default, range and meaning. Standard library only, so discovery never pays the numba import. |
+| `schema.py` | The contract, both directions: every config key and every results key with unit, default, range and meaning. Standard library only, so discovery never pays the numba import. |
 | `materials.py` | One `Material` record per metal, plus per-field overrides and the k(T) table choice. |
 | `config.py` | MATLAB `getCfgField` semantics: missing, None and empty fall back to the default. |
 | `physics.py` | The shared closed-form identities: two-bath energetics, the pulse deposit, derived pulse-train quantities. One home each, so a correction lands everywhere at once. |
@@ -81,17 +81,20 @@ Every solver describes itself. Prefer these over grepping for key names:
 
 ```bash
 laserttm list                      # solvers, and which one answers which question
-laserttm describe depth_profile    # every key with unit, default and valid range
+laserttm describe depth_profile    # every config and results key, with units
+laserttm describe depth_profile --section results   # results keys alone
 laserttm materials                 # material presets
 laserttm validate cfg.json         # check a config without running it
 laserttm run cfg.json --dry-run    # validate and report the cost
 laserttm schema depth_profile      # JSON Schema, for typed consumers
 ```
 
-The same surface exists in Python as `describe_solver`, `validate_config`,
-`estimate_run`, `json_schema` and `list_solvers`, and over MCP as tools of
-those names. If `describe` does not show a key, that is a schema bug to fix,
-not a lookup to work around.
+The same surface exists in Python as `describe_solver`, `describe_results`,
+`validate_config`, `estimate_run`, `json_schema` and `list_solvers`, and
+over MCP as tools of those names. `docs/results-contract.md` is generated
+from the same registry. If `describe` does not show a key, that is a schema
+bug to fix, not a lookup to work around; a solver key without a
+`ResultField` row fails the contract test.
 
 ## Commands
 

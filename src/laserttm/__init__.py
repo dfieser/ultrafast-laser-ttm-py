@@ -24,7 +24,9 @@ _SOLVER_EXPORTS = {
 # is valid. Kept separate because schema.py is standard-library only, so
 # describing or validating a run never pays the numba import.
 _SCHEMA_EXPORTS = (
+    "describe_results",
     "describe_solver",
+    "effective_config",
     "estimate_run",
     "json_schema",
     "list_solvers",
@@ -50,7 +52,9 @@ except PackageNotFoundError:  # running from a source tree without install
 __all__ = [
     "__version__",
     "depth_profile_solver",
+    "describe_results",
     "describe_solver",
+    "effective_config",
     "estimate_run",
     "inversion_quantifier",
     "json_schema",
