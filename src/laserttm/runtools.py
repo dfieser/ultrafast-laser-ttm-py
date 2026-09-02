@@ -77,14 +77,19 @@ def to_jsonable(value: Any, max_array: int = 10000) -> Any:
     if isinstance(value, np.ndarray):
         if value.size <= max_array:
             return value.tolist()
+        # min/max over the finite values only: an array of NaN sentinels
+        # (an inversion that never happened) must summarize without a
+        # RuntimeWarning, and None is honest for "no finite values".
+        finite = (value[np.isfinite(value)] if value.dtype.kind == "f"
+                  else value.ravel())
         return {
             "_type": "ndarray-summary",
             "shape": list(value.shape),
             "dtype": str(value.dtype),
             "head": value.ravel()[:20].tolist(),
             "tail": value.ravel()[-20:].tolist(),
-            "min": float(np.nanmin(value)),
-            "max": float(np.nanmax(value)),
+            "min": float(finite.min()) if finite.size else None,
+            "max": float(finite.max()) if finite.size else None,
         }
     if isinstance(value, dict):
         return {str(k): to_jsonable(v, max_array) for k, v in value.items()}

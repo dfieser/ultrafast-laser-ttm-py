@@ -384,7 +384,10 @@ def plot_depth_profile(*, all_times, all_tl_surf, teq_vals, tresid_vals,
             _save_fig(fig7, save_dir, "Cross_Section_Evolution_Over_Pulses",
                       case_tag)
 
-        # Plot 8: residual temperature vs pulse at multiple radii
+        # Plot 8: residual temperature vs pulse at multiple radii. The
+        # depth solver has no per-pulse radial history, so this figure
+        # scales the centre residual by the Gaussian fluence ratio, the
+        # same model _derive_radial_view applies to the snapshots.
         if n_pulses > 1:
             r_sample_factors = np.array([0.0, 0.5, 1.0, 1.5, 2.0])
             r_sample_labels = ["r = 0 (center)", "r = 0.5w", "r = 1.0w",

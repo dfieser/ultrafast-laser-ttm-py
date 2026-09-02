@@ -943,7 +943,7 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
         _r("invDuration_s", "array", "s",
            "Inversion duration per pulse. Zero where none."),
         _r("Te_atMaxInv_C", "array", "degC",
-           "Electron temperature at the largest inversion; NaN where "
+           "Electron temperature at the largest inversion. NaN where "
            "none."),
         _r("Tl_atMaxInv_C", "array", "degC",
            "Lattice temperature at the largest inversion. NaN where none."),

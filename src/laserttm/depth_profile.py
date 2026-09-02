@@ -32,6 +32,7 @@ from .kernels import (
 )
 from .materials import k_model_name, k_table, resolve_material
 from .physics import (
+    INV_THRESHOLD_K,
     bath_energy_density,
     derive_laser,
     energy_mismatch_pct,
@@ -53,9 +54,9 @@ from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 200e-12)
 
-# Surface inversion threshold [K], shared by the per-pulse metrics and the
-# whole-run post-processing so their counts agree.
-_INV_THRESHOLD_K = 0.5
+# The shared threshold under its historical local name; every use site
+# reads this alias.
+_INV_THRESHOLD_K = INV_THRESHOLD_K
 
 _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 

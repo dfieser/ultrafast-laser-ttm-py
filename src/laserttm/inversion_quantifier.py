@@ -15,6 +15,7 @@ import numpy as np
 
 from .config import get_cfg_field
 from .depth_profile import depth_profile_solver
+from .physics import INV_THRESHOLD_K
 from .reporting import (
     apply_case_tag,
     case_tag,
@@ -25,9 +26,8 @@ from .reporting import (
 from .schema import effective_config
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
-# Inversion threshold [K]: a pulse counts as inverted when Tl - Te exceeds
-# this. Matches the per-pulse metrics in depth_profile.
-_INV_THRESHOLD_K = 0.5
+# The shared threshold under its historical local name.
+_INV_THRESHOLD_K = INV_THRESHOLD_K
 
 
 def _resolve_out_path(cfg, f_rep, tau_fwhm, pavg, spot_radius, n_pulses):

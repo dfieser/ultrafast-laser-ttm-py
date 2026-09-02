@@ -308,7 +308,7 @@ def check_run(run_id: str, log_lines: int = 15) -> dict[str, Any]:
     if out["status"] == "failed":
         err_path = os.path.join(out["run_dir"], _ERROR_NAME)
         if os.path.exists(err_path):
-            with open(err_path) as f:
+            with open(err_path, encoding="utf-8") as f:
                 out["error"] = json.load(f).get("traceback", "")
     return out
 
@@ -325,7 +325,8 @@ def get_results(run_id: str) -> dict[str, Any]:
     out = _status(run_id)
     if out["status"] != "done":
         return out
-    with open(os.path.join(out["run_dir"], _SUMMARY_NAME)) as f:
+    with open(os.path.join(out["run_dir"], _SUMMARY_NAME),
+              encoding="utf-8") as f:
         out["results"] = json.load(f)
     out["results_npz"] = os.path.join(out["run_dir"], _RESULTS_NAME)
     return out

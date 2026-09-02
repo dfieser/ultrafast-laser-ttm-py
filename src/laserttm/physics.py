@@ -26,6 +26,13 @@ def matlab_round(x: float) -> int:
     return int(np.floor(x + 0.5))
 
 
+# Surface inversion threshold [K]: a pulse counts as inverted when the
+# surface Tl - Te exceeds this. One home, so the depth solver's per-pulse
+# metrics, the single-pulse detector, and the inversion quantifier's
+# counts can never disagree.
+INV_THRESHOLD_K = 0.5
+
+
 # ==========================  Two-bath energetics  ==========================
 
 

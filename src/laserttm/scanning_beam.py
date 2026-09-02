@@ -137,7 +137,8 @@ def scanning_beam_solver(params: dict | None = None,
     else:
         exp_decay_z = np.zeros(nz)
         box_mask_z = z_grid <= leff
-    legacy_deposit = bool(get_cfg_field(params, "legacyDeposit", False))
+    legacy_deposit = bool(get_cfg_field(params, "legacyDeposit",
+                                        _DEFAULTS["legacyDeposit"]))
     w_shape = deposit_shape_weight(z_grid, leff, depth_is_exp)
 
     coast_gap = trep

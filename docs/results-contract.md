@@ -185,7 +185,7 @@ Inversion analysis.
 | `tMaxInv_s` | array | s | Time of the largest inversion per pulse. NaN where none. |
 | `tOnset_s` | array | s | Inversion onset per pulse. NaN where none. |
 | `invDuration_s` | array | s | Inversion duration per pulse. Zero where none. |
-| `Te_atMaxInv_C` | array | degC | Electron temperature at the largest inversion; NaN where none. |
+| `Te_atMaxInv_C` | array | degC | Electron temperature at the largest inversion. NaN where none. |
 | `Tl_atMaxInv_C` | array | degC | Lattice temperature at the largest inversion. NaN where none. |
 | `peakTe_C` | scalar | degC | Peak surface electron temperature, from the depth run. |
 | `peakTl_C` | scalar | degC | Peak surface lattice temperature, from the depth run. |

@@ -79,6 +79,22 @@ def test_material_props_carry_the_resolved_record(runs):
             == runs["depth_profile"]["materialProps"])
 
 
+def test_the_conductivity_model_claim_matches_what_each_solver_ran(runs):
+    """kModel must state the model actually used, not the material's best.
+
+    Tungsten carries a measured k(T) table, but only the depth and radial
+    solvers run it. The 0D solvers and single_pulse run a constant k, and
+    their record has to say so.
+    """
+    measured = {"depth_profile", "radial_profile", "inversion_quantifier"}
+    for solver_id, res in runs.items():
+        k_model = res["materialProps"]["kModel"]
+        if solver_id in measured:
+            assert k_model.startswith("measured"), (solver_id, k_model)
+        else:
+            assert k_model.startswith("constant"), (solver_id, k_model)
+
+
 def test_the_new_uniform_scalars(runs):
     sp = runs["surface_point"]
     assert sp["wallTime_s"] > 0

@@ -22,7 +22,7 @@ from scipy.sparse import bmat, diags
 from .config import get_cfg_field
 from .kernels import profile_code, ttm_1d_rhs
 from .materials import k_model_name, k_table, resolve_material
-from .physics import derive_laser, energy_mismatch_pct
+from .physics import INV_THRESHOLD_K, derive_laser, energy_mismatch_pct
 from .reporting import (
     apply_case_tag,
     case_tag,
@@ -239,7 +239,7 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
 
     # ==================  Post-processing  ===================================
     d_t_surf = all_tl_surf - all_te_surf
-    inv_threshold = 0.5
+    inv_threshold = INV_THRESHOLD_K
     inversion_mask = d_t_surf > inv_threshold
     first_pulse_center = pulse_offset
 
@@ -401,7 +401,9 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
         "material": material,
         "caseTag": case_tag(cfg),
         "resolvedConfig": effective_config("single_pulse", cfg),
-        "materialProps": mat.props(k_model_name(mat)),
+        # constant_only mirrors the k_table call above: this solver runs
+        # the flat table even for tungsten, and the record must say so.
+        "materialProps": mat.props(k_model_name(mat, constant_only=True)),
         "warnings": [],
         "nPulses": n_pulses,
         "peakTe_C": te_peak_all - 273.15,
