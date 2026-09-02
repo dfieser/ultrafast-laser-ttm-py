@@ -605,6 +605,16 @@ def _matlab_round(x: float) -> int:
     return math.floor(x + 0.5)
 
 
+def effective_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
+    """The config actually in force: defaults overlaid with the caller's cfg.
+
+    This is what every solver returns as ``resolvedConfig``, and the same
+    merge validate_config reports as ``resolved``. None and empty values
+    fall back to the default, exactly as get_cfg_field treats them.
+    """
+    return _effective(solver_schema(solver_id), cfg)
+
+
 def _effective(sch: SolverSchema, cfg: dict | None) -> dict[str, Any]:
     """Defaults overlaid with the config, honoring MATLAB empty semantics.
 

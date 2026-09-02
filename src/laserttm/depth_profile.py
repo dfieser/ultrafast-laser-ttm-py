@@ -31,7 +31,12 @@ from .kernels import (
     ttm_1d_rhs,
 )
 from .materials import k_model_name, k_table, resolve_material
-from .physics import bath_energy_density, derive_laser, equilibrium_temperature
+from .physics import (
+    bath_energy_density,
+    derive_laser,
+    energy_mismatch_pct,
+    equilibrium_temperature,
+)
 from .progress import ProgressReporter
 from .reporting import (
     NO_HISTORY_NOTE,
@@ -43,7 +48,7 @@ from .reporting import (
     write_xy_table,
 )
 from .schema import defaults as schema_defaults
-from .schema import require_pulses
+from .schema import effective_config, require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 200e-12)
@@ -58,7 +63,8 @@ _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
 
 def _derive_radial_view(profile_snaps_tz, t0, spot_radius, nr_radial,
-                        r_max_factor, alpha_diff, sim_duration):
+                        r_max_factor, alpha_diff, sim_duration,
+                        warnings_out):
     """Scale the depth solution radially under the Gaussian fluence profile.
 
     The 1D solve is a beam-centre column. Away from centre the deposited
@@ -74,10 +80,13 @@ def _derive_radial_view(profile_snaps_tz, t0, spot_radius, nr_radial,
     print(f"  Lateral diffusion length: {l_lat * 1e6:.2f} um  "
           f"(spot radius: {spot_radius * 1e6:.0f} um)")
     if l_lat > 0.1 * spot_radius:
-        warnings.warn(
-            f"Lateral diffusion ({l_lat * 1e6:.1f} um) is >10% of spot "
-            f"radius ({spot_radius * 1e6:.0f} um). Radial scaling "
-            "approximation degrades.", stacklevel=2)
+        msg = (f"Lateral diffusion ({l_lat * 1e6:.1f} um) is >10% of spot "
+               f"radius ({spot_radius * 1e6:.0f} um). Radial scaling "
+               "approximation degrades.")
+        # Both routes on purpose: warnings.warn for Python callers, the
+        # results list for CLI and MCP consumers reading serialized output.
+        warnings.warn(msg, stacklevel=2)
+        warnings_out.append(msg)
 
     # Surface temperature versus radius at each snapshot pulse.
     surface_c = np.array([
@@ -686,12 +695,13 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     # The radial view is part of the solution, not a figure. Computing it
     # here means the CLI and the MCP server get it, and the accuracy warning
     # it raises, even though both default to no figures.
+    run_warnings: list[str] = []
     radial_view = None
     if enable_radial and profile_snaps_tz:
         print("\n=== Radial Surface Temperature Profiles (Multi-Pulse) ===")
         radial_view = _derive_radial_view(
             profile_snaps_tz, t0, spot_radius, nr_radial, r_max_factor,
-            alpha_diff, sim_duration)
+            alpha_diff, sim_duration, run_warnings)
 
     if make_plots:
         from .plotting import plot_depth_profile
@@ -728,10 +738,21 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         "solverId": "depth_profile",
         "contractVersion": "v1",
         "material": material,
+        "caseTag": case_tag(cfg),
+        "resolvedConfig": effective_config("depth_profile", cfg),
+        "materialProps": mat.props(k_model_name(mat)),
+        "warnings": run_warnings,
         "nPulses": n_pulses,
+        "peakPulse": peak_pulse,
         "peakTe_C": te_peak_all - 273.15,
         "peakTl_C": tl_peak_all - 273.15,
         "finalResid_C": tresid_vals[-1] - 273.15,
+        "invDetected": inv_detected,
+        "maxInv_K": float(max_inv_all) if inv_detected else 0.0,
+        "invThreshold_K": _INV_THRESHOLD_K,
+        "absorbedAreal_J_m2": e_input,
+        "depthEnergy_J_m2": du_depth,
+        "energyMismatch_pct": energy_mismatch_pct(e_input, du_depth),
         "wallTime_s": wall_time,
         "outputFile": out_path,
         "outputDir": output_dir,

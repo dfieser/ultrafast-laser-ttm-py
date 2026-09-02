@@ -57,6 +57,31 @@ class Material:
         """Optical penetration depth [m]."""
         return None if self.alpha_opt is None else 1.0 / self.alpha_opt
 
+    def props(self, k_model: str) -> dict:
+        """The resolved record as a results-dict entry.
+
+        ``k_model`` is the conductivity model the calling solver actually
+        used (see k_model_name), since the same material can run with the
+        measured k(T) table or a constant k depending on the solver.
+        Spellings follow the cfg override keys where those exist; the two
+        conductivity terms carry explicit names because the cfg key ``kl``
+        historically means the total conductivity in the lattice-family
+        solvers and the lattice-only term in the depth-resolved ones.
+        """
+        return {
+            "material": self.key,
+            "gamma": self.gamma,
+            "Cl": self.cl,
+            "G": self.g_ep,
+            "kTotal_W_mK": self.k_total,
+            "ke0_W_mK": self.ke0,
+            "kLattice_W_mK": self.kl,
+            "alpha_opt_1_m": self.alpha_opt,
+            "delta_opt_m": self.delta_opt,
+            "Tmelt_C": self.t_melt_c,
+            "kModel": k_model,
+        }
+
 
 # Melting points are the accepted handbook values; every other number is the
 # value the per-solver preset tables carried before they were merged here.

@@ -17,11 +17,17 @@ from .config import get_cfg_field
 from .depth_profile import depth_profile_solver
 from .reporting import (
     apply_case_tag,
+    case_tag,
     filename_slug,
     resolve_output_dir,
     write_header,
 )
+from .schema import effective_config
 from .units import smart_energy, smart_freq, smart_length, smart_time
+
+# Inversion threshold [K]: a pulse counts as inverted when Tl - Te exceeds
+# this. Matches the per-pulse metrics in depth_profile.
+_INV_THRESHOLD_K = 0.5
 
 
 def _resolve_out_path(cfg, f_rep, tau_fwhm, pavg, spot_radius, n_pulses):
@@ -91,7 +97,7 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
     # ==================  Inversion analysis  ================================
     print("\n--- Inversion Analysis ---")
 
-    inv_threshold = 0.5  # [K]
+    inv_threshold = _INV_THRESHOLD_K
     has_inversion = inv_max > inv_threshold
     n_inv_pulses = int(np.sum(has_inversion))
     inv_pulse_idx = np.flatnonzero(has_inversion) + 1  # 1-based, as in MATLAB
@@ -276,6 +282,13 @@ def _build_results(cfg, dr, n_pulses, material, inv_max, te_peak, tl_peak,
         "solverId": "inversion_quantifier",
         "contractVersion": "v1",
         "material": material,
+        "caseTag": case_tag(cfg),
+        "resolvedConfig": effective_config("inversion_quantifier", input_cfg),
+        # From the depth run; absent when the caller supplied depthResults
+        # from an older laserttm.
+        "materialProps": dr.get("materialProps"),
+        "warnings": list(dr.get("warnings", [])),
+        "invThreshold_K": _INV_THRESHOLD_K,
         "nPulses": n_pulses,
         "nInvPulses": n_inv_pulses,
         # Summary statistics

@@ -21,8 +21,8 @@ from scipy.sparse import bmat, diags
 
 from .config import get_cfg_field
 from .kernels import profile_code, ttm_1d_rhs
-from .materials import k_table, resolve_material
-from .physics import derive_laser
+from .materials import k_model_name, k_table, resolve_material
+from .physics import derive_laser, energy_mismatch_pct
 from .reporting import (
     apply_case_tag,
     case_tag,
@@ -32,6 +32,7 @@ from .reporting import (
     write_xy_table,
 )
 from .schema import defaults as schema_defaults
+from .schema import effective_config
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 200e-12)
@@ -398,14 +399,29 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
         "solverId": "single_pulse",
         "contractVersion": "v1",
         "material": material,
+        "caseTag": case_tag(cfg),
+        "resolvedConfig": effective_config("single_pulse", cfg),
+        "materialProps": mat.props(k_model_name(mat)),
+        "warnings": [],
+        "nPulses": n_pulses,
         "peakTe_C": te_peak_all - 273.15,
         "peakTl_C": tl_peak_all - 273.15,
         "finalTe_C": all_te_surf[-1] - 273.15,
         "finalTl_C": all_tl_surf[-1] - 273.15,
+        "finalResid_C": all_tl_surf[-1] - 273.15,
         "wallTime_s": wall_time,
         "outputFile": out_path,
         "outputDir": output_dir,
         "inputConfig": cfg,
         "invDetected": inv_detected,
         "maxInv_C": max_inv,
+        # A temperature difference: the Kelvin spelling is canonical and
+        # numerically identical to maxInv_C, which stays for compatibility.
+        "maxInv_K": max_inv,
+        "invThreshold_K": inv_threshold,
+        "tInvOnset_s": t_inv_onset if inv_detected else float("nan"),
+        "tMaxInv_s": t_inv_max if inv_detected else float("nan"),
+        "absorbedAreal_J_m2": e_input,
+        "depthEnergy_J_m2": du_total,
+        "energyMismatch_pct": energy_mismatch_pct(e_input, du_total),
     }

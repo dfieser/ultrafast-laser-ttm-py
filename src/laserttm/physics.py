@@ -54,6 +54,17 @@ def equilibrate(te, tl, gamma: float, cl: float):
                                    gamma, cl)
 
 
+def energy_mismatch_pct(absorbed_areal: float, stored_areal: float) -> float:
+    """Relative energy-bookkeeping mismatch, in percent of the absorbed.
+
+    The hybrid models deposit energy in a 0D/fine stage and account for it
+    on a coarser depth grid, so a mismatch here is expected and diagnostic,
+    not an error. See deposit_pulse for the coarse-grid deposit caveat.
+    """
+    return abs(absorbed_areal - stored_areal) / max(abs(absorbed_areal),
+                                                    np.finfo(float).eps) * 100.0
+
+
 # ==========================  Energy deposition  ============================
 
 

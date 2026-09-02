@@ -39,12 +39,13 @@ from .physics import (
 from .progress import ProgressReporter
 from .reporting import (
     apply_case_tag,
+    case_tag,
     filename_slug,
     resolve_output_dir,
     write_header,
 )
 from .schema import defaults as schema_defaults
-from .schema import require_pulses
+from .schema import effective_config, require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 
@@ -544,6 +545,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     n_pulses_run = state.n_pulses_run
 
     # ==================  Shared epilogue (both modes)  ======================
+    n_pulses_requested = n_pulses
     n_pulses = n_pulses_run
     cell_times = cell_times[:n_pulses]
     cell_tl = cell_tl[:n_pulses]
@@ -673,10 +675,18 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         "solverId": "radial_profile",
         "contractVersion": "v1",
         "material": material,
+        "caseTag": case_tag(cfg),
+        "resolvedConfig": effective_config("radial_profile", cfg),
+        "materialProps": mat.props(k_model_name(mat)),
+        "warnings": [],
         "mode": radial_solve_mode,
         "nPulses": n_pulses,
+        "nPulsesRequested": n_pulses_requested,
+        "earlyStopped": n_pulses < n_pulses_requested,
         "peakTeq_C": teq_vals.max() - 273.15,
         "finalResid_C": tresid_vals[-1] - 273.15,
+        "TeqVals_C": teq_vals - 273.15,
+        "TresidVals_C": tresid_vals - 273.15,
         "wallTime_s": wall_time,
         "outputFile": out_path,
         "outputDir": output_dir,

@@ -19,24 +19,26 @@ import numpy as np
 
 from .config import get_cfg_field
 from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
-from .materials import resolve_material
+from .materials import k_model_name, resolve_material
 from .physics import (
     deposit_pulse,
     depth_deposit_shape,
     derive_laser,
+    energy_mismatch_pct,
     equilibrate,
 )
 from .progress import ProgressReporter
 from .reporting import (
     NO_HISTORY_NOTE,
     apply_case_tag,
+    case_tag,
     filename_slug,
     resolve_output_dir,
     write_header,
     write_xy_table,
 )
 from .schema import defaults as schema_defaults
-from .schema import require_pulses
+from .schema import effective_config, require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
@@ -357,8 +359,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     # Energy conservation check (approximate in the hybrid 0D+1D model)
     du_depth = cl * _trapezoid(tz - t0, z_grid)     # [J/m^2]
     absorbed_areal = absorbed * leff                # [J/m^2]
-    err_rel = abs(absorbed_areal - du_depth) / max(abs(absorbed_areal),
-                                                   np.finfo(float).eps) * 100.0
+    err_rel = energy_mismatch_pct(absorbed_areal, du_depth)
 
     # ==================  Print results  =====================================
     print("\n============================================================")
@@ -480,6 +481,10 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         "solverId": "surface_point",
         "contractVersion": "v1",
         "material": material,
+        "caseTag": case_tag(cfg),
+        "resolvedConfig": effective_config("surface_point", cfg),
+        "materialProps": mat.props(k_model_name(mat, constant_only=True)),
+        "warnings": [],
         "outputFile": out_path,
         "outputDir": output_dir,
         "inputConfig": cfg,
@@ -492,8 +497,16 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         "peakPulse": peak_pulse,
         "peakTe_C": te_peak - 273.15,
         "peakTl_C": tl_peak - 273.15,
+        "finalTe_C": te_final - 273.15,
+        "finalTl_C": tl_final - 273.15,
         "finalResid_C": tresid_vals[-1] - 273.15,
+        "wallTime_s": wall_time_s,
         "projectedSteadyState_C": t_ss_c,
+        "nChar": n_char,
+        "baselineFitRMSE_K": fit_residual,
+        "steadyStateReached_pct": (
+            (1 - np.exp(-n_pulses / n_char)) * 100.0
+            if baseline_fit_ok else float("nan")),
         "TeqVals_C": teq_vals - 273.15,
         "TresidVals_C": tresid_vals - 273.15,
         "absorbedAreal_J_m2": absorbed_areal,

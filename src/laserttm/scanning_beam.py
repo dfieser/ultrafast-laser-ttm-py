@@ -22,12 +22,12 @@ from scipy.io import savemat
 
 from .config import get_cfg_field
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
-from .materials import resolve_material
+from .materials import k_model_name, resolve_material
 from .physics import derive_laser, equilibrate
 from .progress import ProgressReporter
-from .reporting import apply_case_tag, filename_slug, write_header
+from .reporting import apply_case_tag, case_tag, filename_slug, write_header
 from .schema import defaults as schema_defaults
-from .schema import require_pulses
+from .schema import effective_config, require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
 # Defaults come from the schema, which is the single place they are declared
@@ -186,13 +186,19 @@ def scanning_beam_solver(params: dict | None = None,
         "solverId": "scanning_beam",
         "contractVersion": "v1",
         "material": params["material"],
+        "caseTag": case_tag(params),
+        "resolvedConfig": effective_config("scanning_beam", user_params),
+        "materialProps": mat.props(k_model_name(mat, constant_only=True)),
+        "warnings": [],
         "Tpeak_map": tpeak_map,
         "Tsurf": tsurf,
         "peakT_history": peak_t_history,
         "xGrid": x_grid,
         "yGrid": y_grid,
         "nPulses": n_pulses,
+        "peakT_C": float(tpeak_map.max()) - 273.15,
         "pulseSpacing": pulse_spacing,
+        "simDuration_s": sim_duration,
         "wallTime": wall_time,
         "wallTime_s": wall_time,
         "dTeq_single": dteq_single,
