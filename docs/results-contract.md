@@ -98,6 +98,16 @@ Depth profile.
 | `invDurationPerPulse_s` | array | s | How long the inversion lasted in each pulse. Zero where none. |
 | `Te_atMaxInvPerPulse_C` | array | degC | Electron temperature at the moment of largest inversion; NaN where none. |
 | `Tl_atMaxInvPerPulse_C` | array | degC | Lattice temperature at the moment of largest inversion; NaN where none. |
+| `time_s` | array | s | Surface sample times over the whole train; empty when storeHistory is off. |
+| `Te_C` | array | degC | Surface electron temperature at each sample; empty when storeHistory is off. |
+| `Tl_C` | array | degC | Surface lattice temperature at each sample; empty when storeHistory is off. |
+| `zGrid_m` | array | m | Fine depth grid of the snapshots. |
+| `snapshotDelays_s` | array | s | Delay of each first-pulse snapshot from the pulse centre, as sampled. |
+| `TeSnapshots_C` | array | degC | Electron temperature versus depth at each first-pulse snapshot, shape (nSnapshots, Nz). |
+| `TlSnapshots_C` | array | degC | Lattice temperature versus depth at each first-pulse snapshot, shape (nSnapshots, Nz). |
+| `zGridDiff_m` | array | m | Coarse diffusion grid of the residual profiles. |
+| `profileSnapshotPulses` | array |  | 1-based pulses at which a residual depth profile was kept, logarithmically spaced, at most 12. |
+| `profileSnapshots_C` | array | degC | Residual temperature versus depth after each snapshot pulse, shape (nProfiles, NzDiff). |
 | `f_rep` | scalar | Hz | Echo of the repetition rate. Kept for compatibility, prefer `resolvedConfig`. |
 | `Pavg` | scalar | W | Echo of the average power. Kept for compatibility, prefer `resolvedConfig`. |
 | `tau_FWHM` | scalar | s | Echo of the pulse width. Kept for compatibility, prefer `resolvedConfig`. |
@@ -153,6 +163,13 @@ Single pulse.
 | `invThreshold_K` | scalar | K | Threshold above which Tl - Te counts as an inversion. |
 | `tInvOnset_s` | scalar | s | Inversion onset relative to the pulse centre. NaN when none. |
 | `tMaxInv_s` | scalar | s | Time of the largest inversion relative to the pulse centre; NaN when none. |
+| `time_s` | array | s | Surface sample times. |
+| `Te_C` | array | degC | Surface electron temperature at each sample. |
+| `Tl_C` | array | degC | Surface lattice temperature at each sample. |
+| `zGrid_m` | array | m | Depth grid of the snapshots. |
+| `snapshotDelays_s` | array | s | Delay of each snapshot from the pulse centre, as sampled. |
+| `TeSnapshots_C` | array | degC | Electron temperature versus depth at each snapshot, shape (nSnapshots, Nz). |
+| `TlSnapshots_C` | array | degC | Lattice temperature versus depth at each snapshot, shape (nSnapshots, Nz). |
 | `absorbedAreal_J_m2` | scalar | J/m^2 | Energy absorbed per unit area. |
 | `depthEnergy_J_m2` | scalar | J/m^2 | Energy stored in the depth grid at the end. |
 | `energyMismatch_pct` | scalar | % | Bookkeeping mismatch between the two. |

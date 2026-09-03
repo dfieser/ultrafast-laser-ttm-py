@@ -136,6 +136,7 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
     snap_te: list[np.ndarray] = []
     snap_tl: list[np.ndarray] = []
     snap_labels: list[str] = []
+    snap_delays: list[float] = []
     te_peak_per_pulse = np.zeros(n_pulses)
     tl_peak_per_pulse = np.zeros(n_pulses)
     tresid_per_pulse = np.zeros(n_pulses)
@@ -220,6 +221,7 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
                     snap_tl.append(y_sol[idx, nz:].copy())
                     dv, du = smart_time(t_sol[idx] - t_pulse_center)
                     snap_labels.append(f"{dv:.3g} {du}")
+                    snap_delays.append(float(t_sol[idx] - t_pulse_center))
 
         te_peak_per_pulse[np_i - 1] = te_s.max()
         tl_peak_per_pulse[np_i - 1] = tl_s.max()
@@ -423,6 +425,17 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
         "invThreshold_K": inv_threshold,
         "tInvOnset_s": t_inv_onset if inv_detected else float("nan"),
         "tMaxInv_s": t_inv_max if inv_detected else float("nan"),
+        # Surface traces and the depth snapshots, for consumers that
+        # animate or replot the run from the returned arrays.
+        "time_s": all_times,
+        "Te_C": all_te_surf - 273.15,
+        "Tl_C": all_tl_surf - 273.15,
+        "zGrid_m": z_grid,
+        "snapshotDelays_s": np.asarray(snap_delays, dtype=float),
+        "TeSnapshots_C": (np.asarray(snap_te) - 273.15 if snap_te
+                          else np.empty((0, nz))),
+        "TlSnapshots_C": (np.asarray(snap_tl) - 273.15 if snap_tl
+                          else np.empty((0, nz))),
         "absorbedAreal_J_m2": e_input,
         "depthEnergy_J_m2": du_total,
         "energyMismatch_pct": energy_mismatch_pct(e_input, du_total),

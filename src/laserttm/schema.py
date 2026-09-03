@@ -767,6 +767,33 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
         _r("Tl_atMaxInvPerPulse_C", "array", "degC",
            "Lattice temperature at the moment of largest inversion; NaN "
            "where none."),
+        _r("time_s", "array", "s",
+           "Surface sample times over the whole train; empty when "
+           "storeHistory is off."),
+        _r("Te_C", "array", "degC",
+           "Surface electron temperature at each sample; empty when "
+           "storeHistory is off."),
+        _r("Tl_C", "array", "degC",
+           "Surface lattice temperature at each sample; empty when "
+           "storeHistory is off."),
+        _r("zGrid_m", "array", "m", "Fine depth grid of the snapshots."),
+        _r("snapshotDelays_s", "array", "s",
+           "Delay of each first-pulse snapshot from the pulse centre, as "
+           "sampled."),
+        _r("TeSnapshots_C", "array", "degC",
+           "Electron temperature versus depth at each first-pulse "
+           "snapshot, shape (nSnapshots, Nz)."),
+        _r("TlSnapshots_C", "array", "degC",
+           "Lattice temperature versus depth at each first-pulse "
+           "snapshot, shape (nSnapshots, Nz)."),
+        _r("zGridDiff_m", "array", "m",
+           "Coarse diffusion grid of the residual profiles."),
+        _r("profileSnapshotPulses", "array", None,
+           "1-based pulses at which a residual depth profile was kept, "
+           "logarithmically spaced, at most 12."),
+        _r("profileSnapshots_C", "array", "degC",
+           "Residual temperature versus depth after each snapshot pulse, "
+           "shape (nProfiles, NzDiff)."),
         _r("f_rep", "scalar", "Hz", "Echo of the repetition rate.",
            prefer="resolvedConfig"),
         _r("Pavg", "scalar", "W", "Echo of the average power.",
@@ -861,6 +888,20 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
         _r("tMaxInv_s", "scalar", "s",
            "Time of the largest inversion relative to the pulse centre; "
            "NaN when none."),
+        _r("time_s", "array", "s", "Surface sample times."),
+        _r("Te_C", "array", "degC",
+           "Surface electron temperature at each sample."),
+        _r("Tl_C", "array", "degC",
+           "Surface lattice temperature at each sample."),
+        _r("zGrid_m", "array", "m", "Depth grid of the snapshots."),
+        _r("snapshotDelays_s", "array", "s",
+           "Delay of each snapshot from the pulse centre, as sampled."),
+        _r("TeSnapshots_C", "array", "degC",
+           "Electron temperature versus depth at each snapshot, shape "
+           "(nSnapshots, Nz)."),
+        _r("TlSnapshots_C", "array", "degC",
+           "Lattice temperature versus depth at each snapshot, shape "
+           "(nSnapshots, Nz)."),
         _r("absorbedAreal_J_m2", "scalar", "J/m^2",
            "Energy absorbed per unit area."),
         _r("depthEnergy_J_m2", "scalar", "J/m^2",

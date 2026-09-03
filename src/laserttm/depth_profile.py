@@ -258,6 +258,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     snap_te: list[np.ndarray] = []
     snap_tl: list[np.ndarray] = []
     snap_labels: list[str] = []
+    snap_delays: list[float] = []
 
     tz_diff = t0 * np.ones(nz_diff)
 
@@ -417,6 +418,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
                     snap_tl.append(y_sol[idx, nz:].copy())
                     dv, du = smart_time(t_sol[idx] - t_pulse_center)
                     snap_labels.append(f"{dv:.3g} {du}")
+                    snap_delays.append(float(t_sol[idx] - t_pulse_center))
 
         # --- Map fine-grid end state back onto the coarse diffusion grid ---
         te_end_fine = y_sol[-1, :nz]
@@ -773,6 +775,21 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         "invDurationPerPulse_s": inv_duration_per_pulse,
         "Te_atMaxInvPerPulse_C": te_at_max_inv_per_pulse - 273.15,
         "Tl_atMaxInvPerPulse_C": tl_at_max_inv_per_pulse - 273.15,
+        # Surface traces over the whole train (empty without storeHistory),
+        # the first-pulse depth snapshots, and the residual depth profiles
+        # at the logarithmically spaced snapshot pulses.
+        "time_s": all_times if store_history else np.empty(0),
+        "Te_C": all_te_surf - 273.15 if store_history else np.empty(0),
+        "Tl_C": all_tl_surf - 273.15 if store_history else np.empty(0),
+        "zGrid_m": z_grid,
+        "snapshotDelays_s": np.asarray(snap_delays, dtype=float),
+        "TeSnapshots_C": (np.asarray(snap_te) - 273.15 if snap_te
+                          else np.empty((0, nz))),
+        "TlSnapshots_C": (np.asarray(snap_tl) - 273.15 if snap_tl
+                          else np.empty((0, nz))),
+        "zGridDiff_m": z_grid_diff,
+        "profileSnapshotPulses": np.asarray(profile_snap_pulses, dtype=int),
+        "profileSnapshots_C": np.asarray(profile_snaps_tz) - 273.15,
         # Input parameters (for downstream analysis)
         "f_rep": f_rep,
         "Pavg": pavg,
