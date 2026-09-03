@@ -62,10 +62,6 @@ Surface point.
 | `finalTe_C` | scalar | degC | Electron temperature at the last sample. |
 | `finalTl_C` | scalar | degC | Lattice temperature at the last sample. |
 | `finalResid_C` | scalar | degC | Residual surface temperature after the final inter-pulse diffusion. |
-| `projectedSteadyState_C` | scalar | degC | Steady-state baseline projected from the envelope fit. |
-| `nChar` | scalar |  | Characteristic pulse count of the baseline exponential; NaN when the fit failed. |
-| `baselineFitRMSE_K` | scalar | K | Root-mean-square error of the baseline fit; NaN when the fit failed. |
-| `steadyStateReached_pct` | scalar | % | Fraction of the projected steady-state reached by the last pulse. NaN when the fit failed. |
 | `TeqVals_C` | array | degC | Post-pulse equilibrium temperature, one per pulse. |
 | `TresidVals_C` | array | degC | Residual temperature after each inter-pulse diffusion. |
 | `absorbedAreal_J_m2` | scalar | J/m^2 | Energy absorbed per unit area over the run. |

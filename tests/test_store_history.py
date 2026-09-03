@@ -59,7 +59,7 @@ def test_surface_point_results_identical(tmp_path):
         {**cfg, "outputDir": str(tmp_path / "b"), "storeHistory": False})
 
     for key in ("finalResid_C", "peakTe_C", "peakTl_C", "peakPulse",
-                "projectedSteadyState_C", "absorbedAreal_J_m2",
+                "absorbedAreal_J_m2",
                 "depthEnergy_J_m2"):
         assert with_hist[key] == without[key], key
     np.testing.assert_array_equal(with_hist["TeqVals_C"],

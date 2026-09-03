@@ -169,7 +169,6 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     track_peak_time = 0.0
     track_nt = 0
     track_t_end = 0.0
-    track_baseline = np.zeros(n_pulses)
 
     tic_all = time.perf_counter()
     progress = ProgressReporter(n_pulses, title="laserttm: surface point",
@@ -245,7 +244,6 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
             n_coast_steps = 0
             tresidual = teq
 
-        track_baseline[np_i] = track_t_end
         tresid_vals[np_i] = tresidual
         te_now = tresidual
         tl_now = tresidual
@@ -272,15 +270,11 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
             arr for pair in zip(cell_tl, cell_coast_tl) for arr in pair
         ])
         pulse_start_idx = np.zeros(n_pulses, dtype=np.int64)
-        pulse_end_idx = np.zeros(n_pulses, dtype=np.int64)
-        coast_end_idx = np.zeros(n_pulses, dtype=np.int64)
         ptr = 0
         for p in range(n_pulses):
             pulse_start_idx[p] = ptr
             ptr += cell_times[p].size
-            pulse_end_idx[p] = ptr - 1
             ptr += cell_coast_t[p].size
-            coast_end_idx[p] = ptr - 1
         nt = ptr
         t_end = times[nt - 1]
     else:
@@ -316,53 +310,6 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         t_peak_local_val, t_peak_local_unit = smart_time(
             track_peak_time - pulse_center_t[peak_pulse - 1]
         )
-
-    # ==================  Baseline envelope fit  =============================
-    baseline_pulse_nums = np.arange(1, n_pulses + 1, dtype=float)
-    baseline_temps = tresid_vals.copy()
-
-    if store_history:
-        baseline_times_s = np.zeros(n_pulses)
-        for bp in range(n_pulses):
-            if 0 <= coast_end_idx[bp] < nt:
-                baseline_times_s[bp] = times[coast_end_idx[bp]]
-            else:
-                baseline_times_s[bp] = times[pulse_end_idx[bp]]
-    else:
-        baseline_times_s = track_baseline
-
-    baseline_fit_y = None
-    extrap_times_s = None
-    if n_pulses >= 3:
-        from scipy.optimize import minimize
-
-        def exp_sat(p, n):
-            return p[0] - (p[0] - t0) * np.exp(-n / max(p[1], 0.1))
-
-        def cost(p):
-            return np.sum((exp_sat(p, baseline_pulse_nums) - baseline_temps) ** 2)
-
-        p0 = np.array([baseline_temps[-1] * 1.2, n_pulses / 3.0])
-        # fminsearch analogue: Nelder-Mead with TolX=1e-4 (default), TolFun=1e-12
-        res = minimize(cost, p0, method="Nelder-Mead",
-                       options={"xatol": 1e-4, "fatol": 1e-12,
-                                "maxfev": 10000, "maxiter": 400})
-        p_fit = res.x
-        t_ss_k = p_fit[0]
-        n_char = p_fit[1]
-        baseline_fit_y = exp_sat(p_fit, baseline_pulse_nums)
-        fit_residual = float(np.sqrt(np.mean((baseline_fit_y - baseline_temps) ** 2)))
-        baseline_fit_ok = True
-
-        n_extrap = int(np.ceil(n_pulses * 1.5))
-        extrap_nums = np.arange(1, n_extrap + 1, dtype=float)
-        extrap_times_s = baseline_times_s[0] + (extrap_nums - 1) * trep
-    else:
-        t_ss_k = baseline_temps[-1]
-        n_char = np.nan
-        baseline_fit_ok = False
-        fit_residual = np.nan
-    t_ss_c = t_ss_k - 273.15
 
     # Energy conservation check (approximate in the hybrid 0D+1D model)
     du_depth = cl * _trapezoid(tz - t0, z_grid)     # [J/m^2]
@@ -404,13 +351,6 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     print(f"  Final Electron Temp:     {te_final - 273.15:.2f} deg C")
     print(f"  Final Lattice Temp:      {tl_final - 273.15:.2f} deg C")
     print(f"  Final Residual (surf):   {tresid_vals[-1] - 273.15:.2f} deg C  (after diffusion)")
-    print("------------------------------------------------------------")
-    print("  Baseline Envelope (material temperature buildup):")
-    print(f"  Projected Steady-State:  {t_ss_c:.2f} deg C")
-    if baseline_fit_ok:
-        print(f"  Characteristic Pulses:   {n_char:.1f}  "
-              f"({(1 - np.exp(-n_pulses / n_char)) * 100:.1f}% of steady-state reached)")
-        print(f"  Baseline Fit RMSE:       {fit_residual:.4g} K")
     print("------------------------------------------------------------")
     print(f"  E_absorbed (areal):     {absorbed_areal:.4g} J/m^2")
     print(f"  E_depth (areal):        {du_depth:.4g} J/m^2")
@@ -461,13 +401,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         fid.write(f"  Final Electron Temp:   {te_final - 273.15:.2f} deg C\n")
         fid.write(f"  Final Lattice Temp:    {tl_final - 273.15:.2f} deg C\n")
         fid.write(f"  Final Residual (surf): {tresid_vals[-1] - 273.15:.2f} deg C\n")
-        fid.write("\n--- Baseline Envelope (Material Temperature) ---\n")
-        fid.write(f"  Projected Steady-State: {t_ss_c:.2f} deg C\n")
-        if baseline_fit_ok:
-            fid.write(f"  Char. Pulses (n_char):  {n_char:.1f}\n")
-            fid.write(f"  Steady-State Reached:   "
-                      f"{(1 - np.exp(-n_pulses / n_char)) * 100:.1f}%\n")
-            fid.write(f"  Baseline Fit RMSE:      {fit_residual:.4g} K\n")
+        fid.write("\n--- Energy and Pulse Accumulation ---\n")
         fid.write(f"  E_absorbed (areal):    {absorbed_areal:.4g} J/m^2\n")
         fid.write(f"  E_depth (areal):       {du_depth:.4g} J/m^2\n")
         for p in range(n_pulses):
@@ -509,12 +443,6 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         "finalTl_C": tl_final - 273.15,
         "finalResid_C": tresid_vals[-1] - 273.15,
         "wallTime_s": wall_time_s,
-        "projectedSteadyState_C": t_ss_c,
-        "nChar": n_char,
-        "baselineFitRMSE_K": fit_residual,
-        "steadyStateReached_pct": (
-            (1 - np.exp(-n_pulses / n_char)) * 100.0
-            if baseline_fit_ok else float("nan")),
         "TeqVals_C": teq_vals - 273.15,
         "TresidVals_C": tresid_vals - 273.15,
         "absorbedAreal_J_m2": absorbed_areal,
@@ -531,8 +459,6 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         fig_path = plot_surface_point(
             times=times, tl=tl, t_end=t_end,
             teq_vals=teq_vals, tresid_vals=tresid_vals,
-            baseline_fit_ok=baseline_fit_ok, baseline_fit_y=baseline_fit_y,
-            extrap_times_s=extrap_times_s, t_ss_c=t_ss_c,
             material=material, gamma=gamma, cl=cl, g_ep=g_ep, kl=kl,
             pavg=pavg, frep_val=frep_val, frep_unit=frep_unit,
             ep_val=ep_val, ep_unit=ep_unit, tau_val=tau_val, tau_unit=tau_unit,

@@ -766,7 +766,6 @@ def plot_scanning_beam(*, x_grid, y_grid, tpeak_map, peak_t_history, iy_center,
 
 
 def plot_surface_point(*, times, tl, t_end, teq_vals, tresid_vals,
-                       baseline_fit_ok, baseline_fit_y, extrap_times_s, t_ss_c,
                        material, gamma, cl, g_ep, kl,
                        pavg, frep_val, frep_unit, ep_val, ep_unit,
                        tau_val, tau_unit, spot_val, spot_unit, f_si,
@@ -786,12 +785,6 @@ def plot_surface_point(*, times, tl, t_end, teq_vals, tresid_vals,
     t_plot = times[:nt] * t_scale
 
     ax1.plot(t_plot, tl[:nt] - 273.15, "r-", lw=1.5, label="$T_l$ (Lattice)")
-    if baseline_fit_ok and baseline_fit_y is not None:
-        ax1.plot(extrap_times_s[:n_pulses] * t_scale, baseline_fit_y - 273.15,
-                 "--", color=(0.1, 0.5, 0.1), lw=2,
-                 label=f"Baseline Fit → {t_ss_c:.1f} °C")
-        ax1.axhline(t_ss_c, ls=":", color=(0.1, 0.5, 0.1), lw=1.2,
-                    label="Projected $T_{ss}$")
     ax1.legend(loc="best", fontsize=8)
     ax1.set_xlabel(f"Time ({t_unit})", fontsize=12)
     ax1.set_ylabel("Temperature (°C)", fontsize=12)
@@ -837,7 +830,6 @@ def plot_surface_point(*, times, tl, t_end, teq_vals, tresid_vals,
         f"Peak T$_l$:  {tl_peak - 273.15:.1f} °C",
         f"Final T$_{{eq}}$:  {teq_vals[-1] - 273.15:.1f} °C",
         f"Final T$_{{resid}}$:  {tresid_vals[-1] - 273.15:.1f} °C",
-        f"T$_{{ss}}$ (projected):  {t_ss_c:.1f} °C",
         f"E$_{{abs}}$:  {absorbed_areal:.3g} J/m²",
         f"E$_{{depth}}$:  {du_depth:.3g} J/m²",
         f"Time Steps:  {nt}",

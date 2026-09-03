@@ -66,6 +66,16 @@ changes provable rather than hopeful.
 in the schema, not in renamed keys. Any rename ships with an alias and a
 justification in the commit message.
 
+**There is no steady state.** The surface temperature of a substrate under
+a pulse train in this model keeps rising with the pulse count. The 1D depth
+model has no mechanism that would make it level off, so any projected
+steady-state temperature, extrapolated baseline, characteristic pulse count
+or "percent of steady state reached" is a fitted artifact, not a result.
+Release 0.3.0 removed the exponential envelope fit from `surface_point` on
+the owner's decision. Do not reintroduce a fit, a projection, a results key,
+a report line, a figure annotation or a sentence in the docs that speaks of
+steady state. Report what was simulated: `TresidVals_C` and `finalResid_C`.
+
 **Physics does not belong in `plotting.py`.** Anything computed there is
 silently lost whenever `makePlots` is false, which is the default for both
 the CLI and the MCP server. This has already caused one real bug.

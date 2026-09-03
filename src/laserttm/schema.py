@@ -701,17 +701,6 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
         _r("finalResid_C", "scalar", "degC",
            "Residual surface temperature after the final inter-pulse "
            "diffusion."),
-        _r("projectedSteadyState_C", "scalar", "degC",
-           "Steady-state baseline projected from the envelope fit."),
-        _r("nChar", "scalar", None,
-           "Characteristic pulse count of the baseline exponential; NaN "
-           "when the fit failed."),
-        _r("baselineFitRMSE_K", "scalar", "K",
-           "Root-mean-square error of the baseline fit; NaN when the fit "
-           "failed."),
-        _r("steadyStateReached_pct", "scalar", "%",
-           "Fraction of the projected steady-state reached by the last "
-           "pulse. NaN when the fit failed."),
         _r("TeqVals_C", "array", "degC",
            "Post-pulse equilibrium temperature, one per pulse."),
         _r("TresidVals_C", "array", "degC",

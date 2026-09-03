@@ -2,8 +2,7 @@
 
 The MATLAB Phase 1/Phase 2 algorithms are ported step-identically, so
 agreement should be limited by libm/round-off drift over ~1e5 adaptive
-steps, far inside the tolerances asserted here. The projected steady state
-goes through Nelder-Mead (fminsearch vs scipy), so it gets a looser bound.
+steps, far inside the tolerances asserted here.
 """
 
 from __future__ import annotations
@@ -25,7 +24,6 @@ SCALAR_CHECKS = [
     ("finalResid_C", 1e-6, 1e-4),
     ("absorbedAreal_J_m2", 1e-6, 0.0),
     ("depthEnergy_J_m2", 1e-6, 0.0),
-    ("projectedSteadyState_C", 1e-4, 1e-2),
 ]
 
 ARRAY_CHECKS = [
