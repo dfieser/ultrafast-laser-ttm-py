@@ -38,7 +38,7 @@ These keys appear in every solver's results.
 | `caseTag` | str |  | Sanitized caseTag echoed back, empty when unset. |
 | `resolvedConfig` | dict |  | The config actually in force: defaults overlaid with the caller's values under the same empty-means-default semantics the solver itself applies. |
 | `materialProps` | dict |  | The resolved material record: gamma, Cl, G, the two conductivity terms spelled apart as kTotal_W_mK and kLattice_W_mK, optical properties, melting point, and the conductivity model in use. None only when a pre-0.1.22 depthResults dict was supplied. |
-| `warnings` | list |  | Validity warnings raised during the run, for consumers that never see the console. |
+| `warnings` | list |  | Validity warnings raised during the run, for consumers that never see the console. Includes a peak lattice temperature above the melting point, which the model cannot represent. |
 | `nPulses` | scalar |  | Number of pulses simulated. |
 | `wallTime_s` | scalar | s | Wall-clock solve time. |
 | `outputFile` | path |  | The text report written by this run. |

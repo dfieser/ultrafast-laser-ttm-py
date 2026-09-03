@@ -28,6 +28,7 @@ from .physics import (
     derive_laser,
     energy_mismatch_pct,
     equilibrate,
+    validity_warnings,
 )
 from .progress import ProgressReporter
 from .reporting import (
@@ -426,7 +427,7 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         "caseTag": case_tag(cfg),
         "resolvedConfig": effective_config("surface_point", cfg),
         "materialProps": mat.props(k_model_name(mat, constant_only=True)),
-        "warnings": [],
+        "warnings": validity_warnings(tl_peak - 273.15, mat.t_melt_c, material),
         "outputFile": out_path,
         "outputDir": output_dir,
         "inputConfig": cfg,

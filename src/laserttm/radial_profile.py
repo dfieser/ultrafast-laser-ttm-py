@@ -37,6 +37,7 @@ from .physics import (
     depth_deposit_shape,
     derive_laser,
     equilibrate,
+    validity_warnings,
 )
 from .progress import ProgressReporter
 from .reporting import (
@@ -692,7 +693,8 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         "caseTag": case_tag(cfg),
         "resolvedConfig": effective_config("radial_profile", cfg),
         "materialProps": mat.props(k_model_name(mat)),
-        "warnings": [],
+        "warnings": validity_warnings(
+            float(teq_vals.max()) - 273.15, mat.t_melt_c, material),
         "mode": radial_solve_mode,
         "nPulses": n_pulses,
         "nPulsesRequested": n_pulses_requested,

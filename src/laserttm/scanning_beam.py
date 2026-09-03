@@ -23,7 +23,7 @@ from scipy.io import savemat
 from .config import get_cfg_field
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
 from .materials import k_model_name, resolve_material
-from .physics import deposit_shape_weight, derive_laser, equilibrate
+from .physics import deposit_shape_weight, derive_laser, equilibrate, validity_warnings
 from .progress import ProgressReporter
 from .reporting import apply_case_tag, case_tag, filename_slug, write_header
 from .schema import defaults as schema_defaults
@@ -193,7 +193,8 @@ def scanning_beam_solver(params: dict | None = None,
         "caseTag": case_tag(params),
         "resolvedConfig": effective_config("scanning_beam", user_params),
         "materialProps": mat.props(k_model_name(mat, constant_only=True)),
-        "warnings": [],
+        "warnings": validity_warnings(
+            float(tpeak_map.max()) - 273.15, mat.t_melt_c, params["material"]),
         "Tpeak_map": tpeak_map,
         "Tsurf": tsurf,
         "peakT_history": peak_t_history,

@@ -670,7 +670,8 @@ RESULT_ENVELOPE: tuple[ResultField, ...] = (
        "None only when a pre-0.1.22 depthResults dict was supplied."),
     _r("warnings", "list", None,
        "Validity warnings raised during the run, for consumers that never "
-       "see the console."),
+       "see the console. Includes a peak lattice temperature above the "
+       "melting point, which the model cannot represent."),
     _r("nPulses", "scalar", None, "Number of pulses simulated."),
     _r("wallTime_s", "scalar", "s", "Wall-clock solve time."),
     _r("outputFile", "path", None, "The text report written by this run."),

@@ -14,6 +14,7 @@ the MATLAB reference.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -190,3 +191,28 @@ def derive_laser(*, pavg: float, f_rep: float, spot_radius: float,
         n_pulses=(matlab_round(sim_duration * f_rep)
                   if sim_duration is not None else None),
     )
+
+
+def validity_warnings(peak_t_c: float, t_melt_c: float, material: str,
+                      *, emit: bool = True) -> list[str]:
+    """Warnings about a run that left the model's range of validity.
+
+    The solvers have no phase change and no ablation: a lattice above the
+    melting point keeps heating as a solid, so every temperature past that
+    point is a statement about deposited energy, not about the material.
+    Returns the messages for the results envelope and, with emit, raises
+    each one through warnings.warn so console users see it as well.
+    """
+    msgs: list[str] = []
+    if np.isfinite(peak_t_c) and peak_t_c > t_melt_c:
+        msgs.append(
+            f"Peak lattice temperature {peak_t_c:.0f} C exceeds the melting "
+            f"point of {str(material).upper()} ({t_melt_c:.0f} C). The model "
+            f"has no phase change or ablation, so temperatures above the "
+            f"melting point are not physical: the fluence is above the "
+            f"melting threshold for these settings.")
+    if emit:
+        for m in msgs:
+            warnings.warn(m, stacklevel=2)
+    return msgs
+

@@ -37,6 +37,7 @@ from .physics import (
     derive_laser,
     energy_mismatch_pct,
     equilibrium_temperature,
+    validity_warnings,
 )
 from .progress import ProgressReporter
 from .reporting import (
@@ -742,7 +743,8 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         "caseTag": case_tag(cfg),
         "resolvedConfig": effective_config("depth_profile", cfg),
         "materialProps": mat.props(k_model_name(mat)),
-        "warnings": run_warnings,
+        "warnings": run_warnings + validity_warnings(
+            tl_peak_all - 273.15, mat.t_melt_c, material),
         "nPulses": n_pulses,
         "peakPulse": peak_pulse,
         "peakTe_C": te_peak_all - 273.15,
