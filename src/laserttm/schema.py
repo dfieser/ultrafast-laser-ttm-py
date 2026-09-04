@@ -43,12 +43,14 @@ __all__ = [
     "ResultField",
     "SolverSchema",
     "defaults",
+    "derived_quantities",
     "describe_results",
     "describe_solver",
     "effective_config",
     "estimate_run",
     "json_schema",
     "list_solvers",
+    "pulse_count",
     "require_pulses",
     "solver_schema",
     "validate_config",
@@ -129,8 +131,20 @@ _CATALOG: tuple[ParamSpec, ...] = (
        default=0.55, minimum=0.0, maximum=1.0, typical=(0.05, 0.95),
        group="laser"),
     _p("simDuration", "float",
-       "Simulated time. Pulse count is round(simDuration * f_rep).",
-       unit="s", default=100e-6, minimum=1e-15, maximum=1e3, group="laser"),
+       "Simulated time. Without nPulses the pulse count is "
+       "round(simDuration * f_rep) and the run ends at simDuration, so a "
+       "fractional last period is coasted but never fired.",
+       unit="s", default=100e-6, minimum=1e-15, maximum=1e3, group="laser",
+       notes="With nPulses set, simDuration only ends the last coast and "
+             "defaults to nPulses / f_rep."),
+    _p("nPulses", "int",
+       "Number of pulses to fire. Overrides the count derived from "
+       "simDuration.",
+       default=None, minimum=1, maximum=int(1e9), group="laser",
+       notes="The run still ends at simDuration when that is given, so "
+             "nPulses=2 with simDuration=1.2/f_rep fires two pulses and "
+             "coasts to 1.2 periods. When simDuration is omitted it becomes "
+             "nPulses / f_rep."),
     _p("T0_C", "float", "Initial and ambient temperature.", unit="degC",
        default=25.0, minimum=-273.15, maximum=5000.0, group="laser"),
 
@@ -218,8 +232,14 @@ _CATALOG: tuple[ParamSpec, ...] = (
        "Spacing of the coarse depth diffusion grid.",
        unit="m", default=500e-9, minimum=1e-12, maximum=1e-3, group="grid"),
     _p("Ndiff", "int",
-       "Crank-Nicolson substeps per inter-pulse period.",
-       default=100, minimum=1, maximum=int(1e7), group="grid"),
+       "Crank-Nicolson substeps per inter-pulse period, a minimum.",
+       default=100, minimum=1, maximum=int(1e7), group="grid",
+       notes="The solver raises the count as needed to keep the coast "
+             "Fourier number alpha*dt/dz^2 at or below 0.5, and reports "
+             "the count used as NdiffUsed. A larger number leaves the "
+             "end-of-period residual unchanged to a few millikelvin but is "
+             "what makes the samples inside the first 100 ns of each coast "
+             "converged."),
     _p("Nr", "int", "Radial node count.", default=80, minimum=3,
        maximum=100000, group="grid",
        notes="The cylindrical Crank-Nicolson stencil needs at least three "
@@ -232,7 +252,37 @@ _CATALOG: tuple[ParamSpec, ...] = (
        default=20, minimum=2, maximum=100000, group="grid"),
     _p("snapshotDelays", "array",
        "Delays after the pulse centre at which depth snapshots are captured.",
-       unit="s", default=_DEFAULT_SNAPSHOT_DELAYS, group="grid"),
+       unit="s", default=_DEFAULT_SNAPSHOT_DELAYS, group="grid",
+       affects_numerics=False,
+       notes="The requested instants are added to the integrator's output "
+             "times, so every delay inside the first pulse's window is "
+             "returned exactly and a dense list stays distinct. Delays "
+             "beyond that window are skipped."),
+    _p("profileSnapshotPulses", "array",
+       "1-based pulses after which a residual depth profile is kept.",
+       default=None, group="output", affects_numerics=False,
+       notes="Defaults to at most 12 logarithmically spaced pulses ending "
+             "at the last one. Entries beyond nPulses are dropped. The "
+             "radial view is derived at the same pulses."),
+    _p("mapSnapshotPulses", "array",
+       "1-based pulses after which the surface temperature map is kept.",
+       default=None, group="output", affects_numerics=False,
+       notes="Each kept map costs Nx*Ny floats. Entries beyond nPulses "
+             "are dropped."),
+    _p("lateralDiffusionWarnRatio", "float",
+       "Lateral diffusion length over spot radius above which the radial "
+       "view's scaling approximation is flagged.",
+       default=0.1, minimum=0.0, maximum=100.0, group="run",
+       affects_numerics=False),
+    _p("ablationThreshold", "float",
+       "Single-shot ablation threshold fluence used by the validity "
+       "checks. Overrides the material preset.",
+       unit="J/m^2", default=None, minimum=1.0, maximum=1e8,
+       group="material",
+       notes="Compared against the peak fluence 2*Ep/(pi*w^2). The "
+             "tungsten preset is 4400 J/m^2, 0.44 J/cm^2 for femtosecond "
+             "pulses; the other presets carry none, so set this to enable "
+             "the check for them."),
     _p("relTol", "float", "Relative tolerance of the stiff BDF integrator.",
        default=1e-6, minimum=1e-14, maximum=1.0, group="grid"),
     _p("absTol", "float", "Absolute tolerance of the stiff BDF integrator.",
@@ -312,7 +362,25 @@ _CATALOG: tuple[ParamSpec, ...] = (
              "tests do."),
     _p("showProgress", "bool",
        "Show the progress window. None auto-detects a usable display.",
-       default=None, group="run", affects_numerics=False),
+       default=None, group="run", affects_numerics=False,
+       notes="False also silences the per-pulse progress lines on the "
+             "console."),
+    _p("verbose", "bool",
+       "Print the run banner, progress and result summary to the console.",
+       default=True, group="output", affects_numerics=False,
+       notes="False keeps the solver silent. Python warnings still reach "
+             "the caller, and the results dict is unaffected."),
+    _p("writeReport", "bool",
+       "Write the human-readable text report.",
+       default=True, group="output", affects_numerics=False,
+       notes="False writes nothing and returns outputFile as None. The "
+             "results dict carries every number the report would."),
+    _p("reportHistory", "bool",
+       "Append the per-sample XY time-series table to the text report.",
+       default=True, group="output", affects_numerics=False,
+       notes="The table is the bulk of the report on long history runs, "
+             "tens of megabytes for thousands of pulses, and takes longer "
+             "to write than the solve. False keeps the summary only."),
 )
 
 PARAMS: dict[str, ParamSpec] = {spec.name: spec for spec in _CATALOG}
@@ -333,6 +401,9 @@ class SolverSchema:
     params: dict[str, ParamSpec]
     files: tuple[str, ...] = ()
     seconds_per_pulse: float = 1e-3
+    # Extra per-pulse cost of keeping the time history and writing its
+    # XY table, when storeHistory and reportHistory are both in force.
+    history_seconds_per_pulse: float = 0.0
     examples: dict[str, dict] = field(default_factory=dict)
 
     def defaults(self) -> dict[str, Any]:
@@ -397,15 +468,17 @@ _SURFACE_POINT = SolverSchema(
     params=_params(
         *_MATERIAL_LATTICE, "Pavg", "spotRadius", "f_rep", "tau_FWHM",
         "pulseProfile", "absorbance", "T0_C", "simDuration",
-        "Leff", "depthProfile", "dzTarget", "Ndiff", "legacyDeposit",
-        "storeHistory",
+        "nPulses", "Leff", "depthProfile", "dzTarget", "Ndiff",
+        "legacyDeposit", "ablationThreshold", "storeHistory",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
+        "verbose", "writeReport", "reportHistory",
         kl=_KL_TOTAL, kTable=_KTABLE_INERT, T_melt_C=_TMELT_INERT,
         Pavg={"default": 1.0}, spotRadius={"default": 80e-6},
         f_rep={"default": 1e6}, tau_FWHM={"default": 500e-15},
     ),
     files=("TTM_<params>_<n>p_<profile>.txt",),
     seconds_per_pulse=2e-4,
+    history_seconds_per_pulse=1e-4,
     examples={
         "minimal": {"material": "W", "Pavg": 10, "f_rep": 5e6,
                     "simDuration": 50 / 5e6},
@@ -427,12 +500,20 @@ _DEPTH_PROFILE = SolverSchema(
     params=_params(
         *_MATERIAL_OPTICAL, "Pavg", "spotRadius", "f_rep", "tau_FWHM",
         "pulseProfile", "absorbance", "T0_C", "simDuration",
-        "Lz", "Nz", "snapshotDelays", "enableRadialProfile", "Nr_radial",
-        "rMax_factor", "dzTarget_diff", "Ndiff", "relTol", "absTol",
-        "storeHistory",
+        "nPulses", "Lz", "Nz", "snapshotDelays", "profileSnapshotPulses",
+        "enableRadialProfile", "Nr_radial", "rMax_factor",
+        "lateralDiffusionWarnRatio", "dzTarget_diff", "Ndiff", "relTol",
+        "absTol", "ablationThreshold", "storeHistory",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
+        "verbose", "writeReport", "reportHistory",
         kl=_KL_LATTICE, kl_manual=_KL_MANUAL_LATTICE,
         T_melt_C=_TMELT_INERT,
+        enableRadialProfile={
+            "default": False,
+            "notes": "Off by default since 0.4.0: the derived view adds "
+                     "array keys and an accuracy warning on most trains, "
+                     "which consumers that never read them had to wade "
+                     "through. The depth solution is the same either way."},
         rMax_factor={"default": 3.0, "affects_numerics": False,
                      "notes": "Sets the extent of the derived radial view "
                               "only. It does not affect the depth solution."},
@@ -441,6 +522,7 @@ _DEPTH_PROFILE = SolverSchema(
     ),
     files=("TTM_1D_Result_<params>_<n>p_<profile>.txt",),
     seconds_per_pulse=0.135,
+    history_seconds_per_pulse=0.03,
     examples={
         "minimal": {"material": "W", "Pavg": 40, "simDuration": 10 / 18e6},
         "penetration_depth": {"material": "W", "delta_opt": 23e-9,
@@ -460,18 +542,21 @@ _RADIAL_PROFILE = SolverSchema(
     params=_params(
         *_MATERIAL_LATTICE, "Pavg", "spotRadius", "f_rep", "tau_FWHM",
         "pulseProfile", "absorbance", "T0_C", "simDuration",
-        "Leff", "depthProfile", "dzTarget", "Ndiff", "Nr", "rMax_factor",
-        "radialSolveMode", "earlyStopMeltRadius_um", "earlyStopT_melt_C",
-        "earlyStopCheckInterval", "legacyDeposit", "storeHistory",
+        "nPulses", "Leff", "depthProfile", "dzTarget", "Ndiff", "Nr",
+        "rMax_factor", "radialSolveMode", "earlyStopMeltRadius_um",
+        "earlyStopT_melt_C", "earlyStopCheckInterval", "legacyDeposit",
+        "ablationThreshold", "storeHistory",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
+        "verbose", "writeReport",
         kl=_KL_TOTAL,
         simDuration={"default": 1e-3},
-        Ndiff={"notes": "A minimum here. The solver raises it as needed to "
-                        "keep the Fourier number at or below 0.5, unlike the "
-                        "other solvers where it is the exact substep count."},
+        Ndiff={"notes": "A minimum here, raised per coast as needed to keep "
+                        "the Fourier number at or below 0.5 on both the "
+                        "depth and the radial grid."},
     ),
     files=("TTM_Radial_Result_<params>_<n>p_<profile>.txt",),
     seconds_per_pulse=1.2e-2,
+    history_seconds_per_pulse=2e-3,
     examples={
         "minimal": {"material": "W", "Pavg": 40, "simDuration": 100 / 18e6},
         "melt_pool": {"material": "W", "Pavg": 70, "f_rep": 40e6,
@@ -491,8 +576,9 @@ _SINGLE_PULSE = SolverSchema(
     params=_params(
         *_MATERIAL_OPTICAL, "Pavg", "spotRadius", "f_rep", "tau_FWHM",
         "pulseProfile", "absorbance", "T0_C", "Lz", "Nz", "snapshotDelays",
-        "relTol", "absTol",
+        "relTol", "absTol", "ablationThreshold",
         "makePlots", "saveFigures", "outputDir", "caseTag",
+        "verbose", "writeReport", "reportHistory",
         kl=_KL_LATTICE, kl_manual=_KL_MANUAL_LATTICE,
         T_melt_C=_TMELT_INERT,
         Pavg={"default": 1.0}, spotRadius={"default": 80e-6},
@@ -520,14 +606,17 @@ _INVERSION = SolverSchema(
     params=_params(
         *_MATERIAL_OPTICAL, "Pavg", "spotRadius", "f_rep", "tau_FWHM",
         "pulseProfile", "absorbance", "T0_C", "simDuration",
-        "Lz", "Nz", "snapshotDelays", "dzTarget_diff", "Ndiff",
-        "relTol", "absTol", "depthResults",
+        "nPulses", "Lz", "Nz", "snapshotDelays", "profileSnapshotPulses",
+        "dzTarget_diff", "Ndiff", "relTol", "absTol", "ablationThreshold",
+        "depthResults", "storeHistory",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
+        "verbose", "writeReport", "reportHistory",
         kl=_KL_LATTICE, kl_manual=_KL_MANUAL_LATTICE,
         T_melt_C=_TMELT_INERT,
     ),
     files=("Inversion_Analysis_<params>_<n>p.txt",),
     seconds_per_pulse=0.135,
+    history_seconds_per_pulse=0.03,
     examples={"minimal": {"material": "W", "simDuration": 20 / 18e6}},
 )
 
@@ -543,10 +632,14 @@ _SCANNING_BEAM = SolverSchema(
         *_MATERIAL_LATTICE, "Pavg", "spotRadius", "f_rep", "tau_FWHM",
         "pulseProfile", "absorbance", "T0_C", "v_scan", "scanLength",
         "Leff", "depthProfile", "dzTarget", "Ndiff", "NadiPerGap",
-        "legacyDeposit",
-        "Nx", "Ny", "xPad", "yExtent",
+        "legacyDeposit", "ablationThreshold",
+        "Nx", "Ny", "xPad", "yExtent", "mapSnapshotPulses",
         "makePlots", "saveFigures", "outputDir", "caseTag", "showProgress",
+        "verbose", "writeReport",
         kl=_KL_TOTAL, kTable=_KTABLE_INERT, T_melt_C=_TMELT_INERT,
+        Ndiff={"notes": "The exact substep count in this solver: its depth "
+                        "coast is pinned by the MATLAB fixtures, so it is "
+                        "not raised automatically."},
     ),
     files=("TTMmov_<params>_<n>p.txt", "TTMmov_<params>_<n>p_surface.mat"),
     seconds_per_pulse=2e-5,
@@ -637,6 +730,12 @@ class ResultField:
     summary: str
     gated_by: str | None = None   # config key that must be enabled for it
     prefer: str | None = None     # the newer spelling to reach for instead
+    # Axis order of an array, one results key per axis: an array key names
+    # the coordinate along that axis and has the same length; a scalar key
+    # (nPulses) is the axis length itself. Every array field declares its
+    # dims, and the contract test checks them against the live arrays, so
+    # no array can ship without its grid.
+    dims: tuple[str, ...] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"name": self.name, "kind": self.kind,
@@ -645,6 +744,8 @@ class ResultField:
             out["gatedBy"] = self.gated_by
         if self.prefer:
             out["prefer"] = self.prefer
+        if self.dims is not None:
+            out["dims"] = list(self.dims)
         return out
 
 
@@ -669,12 +770,39 @@ RESULT_ENVELOPE: tuple[ResultField, ...] = (
        "properties, melting point, and the conductivity model in use. "
        "None only when a pre-0.1.22 depthResults dict was supplied."),
     _r("warnings", "list", None,
-       "Validity warnings raised during the run, for consumers that never "
-       "see the console. Includes a peak lattice temperature above the "
-       "melting point, which the model cannot represent."),
+       "Validity warnings raised during the run as plain strings, for "
+       "consumers that never see the console. The same items carry a "
+       "machine-readable code in diagnostics."),
+    _r("diagnostics", "list", None,
+       "Every warning the run raised, each a dict with code, message and "
+       "suggestion, in the shape validate_config uses. Codes: "
+       "above_melting (peak lattice temperature past the melting point, "
+       "which the model cannot represent), above_ablation (peak fluence "
+       "past the material's single-shot ablation threshold), "
+       "lateral_diffusion (the radial view's scaling degrades) and "
+       "coast_steps_raised (Ndiff was raised to keep the coast Fourier "
+       "number at 0.5)."),
+    _r("Tmelt_C", "scalar", "degC",
+       "Melting point of the material in force, the value meltDetected "
+       "compares against."),
+    _r("meltDetected", "bool", None,
+       "True when the peak lattice temperature anywhere in the run "
+       "exceeded Tmelt_C. The model has no phase change, so results past "
+       "that point describe deposited energy, not the material."),
+    _r("meltPulse", "scalar", None,
+       "1-based pulse on which the lattice first exceeded the melting "
+       "point; 0 when it never did."),
+    _r("pulseEnergy_J", "scalar", "J", "Pulse energy, Pavg / f_rep."),
+    _r("peakFluence_J_m2", "scalar", "J/m^2",
+       "Peak fluence at beam centre, 2 Ep / (pi w^2) with w the 1/e^2 "
+       "radius. Divide by 1e4 for J/cm^2."),
+    _r("absorbedFluence_J_m2", "scalar", "J/m^2",
+       "Absorbed peak fluence, absorbance times peakFluence_J_m2."),
     _r("nPulses", "scalar", None, "Number of pulses simulated."),
     _r("wallTime_s", "scalar", "s", "Wall-clock solve time."),
-    _r("outputFile", "path", None, "The text report written by this run."),
+    _r("outputFile", "path", None,
+       "The text report written by this run; None when writeReport is "
+       "off."),
     _r("outputDir", "path", None, "Directory holding every file written."),
     _r("inputConfig", "dict", None,
        "The caller's config exactly as passed, unmerged.",
@@ -686,11 +814,27 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
     "surface_point": (
         _r("time_s", "array", "s",
            "Sample times over the whole train; empty when storeHistory "
-           "is off."),
-        _r("Te_K", "array", "K", "Electron temperature at each sample."),
-        _r("Tl_K", "array", "K", "Lattice temperature at each sample."),
-        _r("Te_C", "array", "degC", "Electron temperature, Celsius."),
-        _r("Tl_C", "array", "degC", "Lattice temperature, Celsius."),
+           "is off.", dims=("time_s",)),
+        _r("Te_K", "array", "K",
+           "Electron temperature at each sample. During each inter-pulse "
+           "coast the electrons are equilibrated with the lattice, so "
+           "Te equals Tl there by construction.", dims=("time_s",)),
+        _r("Tl_K", "array", "K", "Lattice temperature at each sample.",
+           dims=("time_s",)),
+        _r("Te_C", "array", "degC",
+           "Electron temperature, Celsius. Equals Tl_C during every "
+           "inter-pulse coast by construction.", dims=("time_s",)),
+        _r("Tl_C", "array", "degC", "Lattice temperature, Celsius.",
+           dims=("time_s",)),
+        _r("TePeakPerPulse_C", "array", "degC",
+           "Peak electron temperature within each pulse's fine stage.",
+           dims=("nPulses",)),
+        _r("TlPeakPerPulse_C", "array", "degC",
+           "Peak lattice temperature within each pulse's fine stage.",
+           dims=("nPulses",)),
+        _r("NdiffUsed", "scalar", None,
+           "Crank-Nicolson substeps per coast actually used: Ndiff, "
+           "raised as needed to keep the Fourier number at or below 0.5."),
         _r("peakPulse", "scalar", None,
            "1-based pulse on which the electron peak occurred."),
         _r("peakTe_C", "scalar", "degC", "Peak electron temperature."),
@@ -703,9 +847,11 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
            "Residual surface temperature after the final inter-pulse "
            "diffusion."),
         _r("TeqVals_C", "array", "degC",
-           "Post-pulse equilibrium temperature, one per pulse."),
+           "Post-pulse equilibrium temperature, one per pulse.",
+           dims=("nPulses",)),
         _r("TresidVals_C", "array", "degC",
-           "Residual temperature after each inter-pulse diffusion."),
+           "Residual temperature after each inter-pulse diffusion.",
+           dims=("nPulses",)),
         _r("absorbedAreal_J_m2", "scalar", "J/m^2",
            "Energy absorbed per unit area over the run."),
         _r("depthEnergy_J_m2", "scalar", "J/m^2",
@@ -742,58 +888,80 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
            "Bookkeeping mismatch between the two; expected in the hybrid "
            "fine+coarse model."),
         _r("TePeakPerPulse_C", "array", "degC",
-           "Peak surface electron temperature, one per pulse."),
+           "Peak surface electron temperature, one per pulse.",
+           dims=("nPulses",)),
         _r("TlPeakPerPulse_C", "array", "degC",
-           "Peak surface lattice temperature, one per pulse."),
+           "Peak surface lattice temperature, one per pulse.",
+           dims=("nPulses",)),
         _r("TeqVals_C", "array", "degC",
-           "Post-pulse equilibrium temperature, one per pulse."),
+           "Post-pulse equilibrium temperature, one per pulse.",
+           dims=("nPulses",)),
         _r("TresidVals_C", "array", "degC",
-           "Residual temperature after each inter-pulse diffusion."),
+           "Residual temperature after each inter-pulse diffusion.",
+           dims=("nPulses",)),
         _r("baseTempPerPulse_C", "array", "degC",
-           "Baseline temperature each pulse started from."),
+           "Baseline temperature each pulse started from.",
+           dims=("nPulses",)),
         _r("invMaxPerPulse_K", "array", "K",
-           "Largest surface Tl - Te within each pulse."),
+           "Largest surface Tl - Te within each pulse, refined between "
+           "samples by the parabola through the three around the maximum.",
+           dims=("nPulses",)),
         _r("tMaxInvPerPulse_s", "array", "s",
            "Time of the largest inversion, relative to each pulse centre; "
-           "NaN where none."),
+           "NaN where none.", dims=("nPulses",)),
         _r("tInvOnsetPerPulse_s", "array", "s",
            "Inversion onset time relative to each pulse centre; NaN where "
-           "none."),
+           "none.", dims=("nPulses",)),
         _r("invDurationPerPulse_s", "array", "s",
-           "How long the inversion lasted in each pulse. Zero where none."),
+           "How long the inversion lasted in each pulse. Zero where none.",
+           dims=("nPulses",)),
         _r("Te_atMaxInvPerPulse_C", "array", "degC",
            "Electron temperature at the moment of largest inversion; NaN "
-           "where none."),
+           "where none.", dims=("nPulses",)),
         _r("Tl_atMaxInvPerPulse_C", "array", "degC",
            "Lattice temperature at the moment of largest inversion; NaN "
-           "where none."),
+           "where none.", dims=("nPulses",)),
+        _r("NdiffUsed", "scalar", None,
+           "Crank-Nicolson substeps per coast actually used: Ndiff, "
+           "raised as needed to keep the Fourier number at or below 0.5."),
         _r("time_s", "array", "s",
            "Surface sample times over the whole train; empty when "
-           "storeHistory is off."),
+           "storeHistory is off.", dims=("time_s",)),
         _r("Te_C", "array", "degC",
            "Surface electron temperature at each sample; empty when "
-           "storeHistory is off."),
+           "storeHistory is off. During each inter-pulse coast the "
+           "electrons are equilibrated with the lattice, so Te_C equals "
+           "Tl_C there by construction.", dims=("time_s",)),
         _r("Tl_C", "array", "degC",
            "Surface lattice temperature at each sample; empty when "
-           "storeHistory is off."),
-        _r("zGrid_m", "array", "m", "Fine depth grid of the snapshots."),
+           "storeHistory is off.", dims=("time_s",)),
+        _r("zGrid_m", "array", "m", "Fine depth grid of the snapshots.",
+           dims=("zGrid_m",)),
         _r("snapshotDelays_s", "array", "s",
-           "Delay of each first-pulse snapshot from the pulse centre, as "
-           "sampled."),
+           "Delay of each first-pulse snapshot from the pulse centre. "
+           "Equal to the requested snapshotDelays that fall inside the "
+           "first pulse's window.", dims=("snapshotDelays_s",)),
         _r("TeSnapshots_C", "array", "degC",
            "Electron temperature versus depth at each first-pulse "
-           "snapshot, shape (nSnapshots, Nz)."),
+           "snapshot.", dims=("snapshotDelays_s", "zGrid_m")),
         _r("TlSnapshots_C", "array", "degC",
            "Lattice temperature versus depth at each first-pulse "
-           "snapshot, shape (nSnapshots, Nz)."),
+           "snapshot.", dims=("snapshotDelays_s", "zGrid_m")),
         _r("zGridDiff_m", "array", "m",
-           "Coarse diffusion grid of the residual profiles."),
+           "Coarse diffusion grid of the residual profiles.",
+           dims=("zGridDiff_m",)),
         _r("profileSnapshotPulses", "array", None,
-           "1-based pulses at which a residual depth profile was kept, "
-           "logarithmically spaced, at most 12."),
+           "1-based pulses after which a residual depth profile was kept: "
+           "the profileSnapshotPulses config, or at most 12 "
+           "logarithmically spaced pulses ending at the last.",
+           dims=("profileSnapshotPulses",)),
+        _r("profileSnapshotTimes_s", "array", "s",
+           "Time at the end of each snapshot pulse's period, the instant "
+           "its residual profile describes.",
+           dims=("profileSnapshotPulses",)),
         _r("profileSnapshots_C", "array", "degC",
-           "Residual temperature versus depth after each snapshot pulse, "
-           "shape (nProfiles, NzDiff)."),
+           "Residual temperature versus depth after each snapshot pulse.",
+           dims=("profileSnapshotPulses", "zGridDiff_m")),
         _r("f_rep", "scalar", "Hz", "Echo of the repetition rate.",
            prefer="resolvedConfig"),
         _r("Pavg", "scalar", "W", "Echo of the average power.",
@@ -806,7 +974,8 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
            prefer="resolvedConfig"),
         _r("T0_C", "scalar", "degC", "Echo of the initial temperature.",
            prefer="resolvedConfig"),
-        _r("F_peak", "scalar", "J/m^2", "Peak fluence at beam centre."),
+        _r("F_peak", "scalar", "J/m^2", "Peak fluence at beam centre.",
+           prefer="peakFluence_J_m2"),
         _r("gamma", "scalar", "J/(m^3 K^2)",
            "Electron heat-capacity coefficient used.",
            prefer="materialProps"),
@@ -828,18 +997,31 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
            prefer="resolvedConfig"),
         _r("radialGrid_um", "array", "um",
            "Radial positions of the scaled view.",
-           gated_by="enableRadialProfile"),
+           gated_by="enableRadialProfile", dims=("radialGrid_um",)),
         _r("radialFluenceRatio", "array", None,
            "Gaussian fluence ratio at each radius.",
-           gated_by="enableRadialProfile"),
+           gated_by="enableRadialProfile", dims=("radialGrid_um",)),
         _r("radialSurfaceProfiles_C", "array", "degC",
-           "Surface temperature versus radius at each snapshot pulse.",
-           gated_by="enableRadialProfile"),
+           "Residual surface temperature versus radius after each "
+           "snapshot pulse.",
+           gated_by="enableRadialProfile",
+           dims=("profileSnapshotPulses", "radialGrid_um")),
         _r("crossSection_C", "array", "degC",
-           "Depth-by-radius temperature map at the last snapshot.",
-           gated_by="enableRadialProfile"),
+           "Radius-by-depth residual temperature map after the last "
+           "snapshot pulse. The same as crossSections_C[-1].",
+           gated_by="enableRadialProfile",
+           dims=("radialGrid_um", "zGridDiff_m")),
+        _r("crossSections_C", "array", "degC",
+           "Radius-by-depth residual temperature map after each snapshot "
+           "pulse, the time-resolved form of crossSection_C.",
+           gated_by="enableRadialProfile",
+           dims=("profileSnapshotPulses", "radialGrid_um", "zGridDiff_m")),
         _r("lateralDiffusionLength_m", "scalar", "m",
            "Lateral diffusion length the radial scaling assumes small.",
+           gated_by="enableRadialProfile"),
+        _r("lateralDiffusionRatio", "scalar", None,
+           "lateralDiffusionLength_m over spotRadius. Above "
+           "lateralDiffusionWarnRatio the run raises lateral_diffusion.",
            gated_by="enableRadialProfile"),
     ),
     "radial_profile": (
@@ -852,16 +1034,26 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
            "nPulsesRequested."),
         _r("peakTeq_C", "scalar", "degC",
            "Largest post-pulse equilibrium temperature at beam centre."),
+        _r("peakTl_C", "scalar", "degC",
+           "Same value as peakTeq_C under the cross-solver name: in this "
+           "0D model the post-pulse equilibrium is the lattice peak."),
         _r("finalResid_C", "scalar", "degC",
            "Residual centre temperature after the final diffusion."),
+        _r("NdiffUsed", "scalar", None,
+           "Largest number of depth Crank-Nicolson substeps used in any "
+           "coast: Ndiff, raised as needed to keep the Fourier number at "
+           "or below 0.5."),
         _r("TeqVals_C", "array", "degC",
-           "Post-pulse equilibrium temperature at centre, one per pulse."),
+           "Post-pulse equilibrium temperature at centre, one per pulse.",
+           dims=("nPulses",)),
         _r("TresidVals_C", "array", "degC",
-           "Residual centre temperature after each inter-pulse diffusion."),
-        _r("rGrid_um", "array", "um", "Radial grid positions."),
+           "Residual centre temperature after each inter-pulse diffusion.",
+           dims=("nPulses",)),
+        _r("rGrid_um", "array", "um", "Radial grid positions.",
+           dims=("rGrid_um",)),
         _r("finalRadialProfile_C", "array", "degC",
            "Residual surface temperature versus radius after the last "
-           "pulse."),
+           "pulse.", dims=("rGrid_um",)),
         _r("spotRadius_um", "scalar", "um", "Echo of the spot radius.",
            prefer="resolvedConfig"),
     ),
@@ -888,20 +1080,26 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
         _r("tMaxInv_s", "scalar", "s",
            "Time of the largest inversion relative to the pulse centre; "
            "NaN when none."),
-        _r("time_s", "array", "s", "Surface sample times."),
+        _r("time_s", "array", "s", "Surface sample times.",
+           dims=("time_s",)),
         _r("Te_C", "array", "degC",
-           "Surface electron temperature at each sample."),
+           "Surface electron temperature at each sample.",
+           dims=("time_s",)),
         _r("Tl_C", "array", "degC",
-           "Surface lattice temperature at each sample."),
-        _r("zGrid_m", "array", "m", "Depth grid of the snapshots."),
+           "Surface lattice temperature at each sample.",
+           dims=("time_s",)),
+        _r("zGrid_m", "array", "m", "Depth grid of the snapshots.",
+           dims=("zGrid_m",)),
         _r("snapshotDelays_s", "array", "s",
-           "Delay of each snapshot from the pulse centre, as sampled."),
+           "Delay of each snapshot from the pulse centre. Equal to the "
+           "requested snapshotDelays that fall inside the run.",
+           dims=("snapshotDelays_s",)),
         _r("TeSnapshots_C", "array", "degC",
-           "Electron temperature versus depth at each snapshot, shape "
-           "(nSnapshots, Nz)."),
+           "Electron temperature versus depth at each snapshot.",
+           dims=("snapshotDelays_s", "zGrid_m")),
         _r("TlSnapshots_C", "array", "degC",
-           "Lattice temperature versus depth at each snapshot, shape "
-           "(nSnapshots, Nz)."),
+           "Lattice temperature versus depth at each snapshot.",
+           dims=("snapshotDelays_s", "zGrid_m")),
         _r("absorbedAreal_J_m2", "scalar", "J/m^2",
            "Energy absorbed per unit area."),
         _r("depthEnergy_J_m2", "scalar", "J/m^2",
@@ -911,14 +1109,42 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
     ),
     "scanning_beam": (
         _r("Tpeak_map", "array", "K",
-           "Peak temperature ever reached at each surface point."),
-        _r("Tsurf", "array", "K", "Final surface temperature map."),
+           "Peak temperature ever reached at each surface point, "
+           "kelvin.", dims=("yGrid", "xGrid"), prefer="Tpeak_map_C"),
+        _r("Tsurf", "array", "K", "Final surface temperature map, kelvin.",
+           dims=("yGrid", "xGrid"), prefer="Tsurf_C"),
         _r("peakT_history", "array", "K",
-           "Peak surface temperature after each pulse."),
-        _r("xGrid", "array", "m", "Surface grid x positions."),
-        _r("yGrid", "array", "m", "Surface grid y positions."),
+           "Peak surface temperature after each pulse, kelvin.",
+           dims=("nPulses",), prefer="peakT_history_C"),
+        _r("Tpeak_map_C", "array", "degC",
+           "Peak temperature ever reached at each surface point.",
+           dims=("yGrid", "xGrid")),
+        _r("Tsurf_C", "array", "degC", "Final surface temperature map.",
+           dims=("yGrid", "xGrid")),
+        _r("peakT_history_C", "array", "degC",
+           "Peak surface temperature after each pulse.",
+           dims=("nPulses",)),
+        _r("xGrid", "array", "m", "Surface grid x positions.",
+           dims=("xGrid",)),
+        _r("yGrid", "array", "m", "Surface grid y positions.",
+           dims=("yGrid",)),
+        _r("beamX_m", "array", "m",
+           "Beam centre position along the scan at each pulse; the beam "
+           "runs along y = 0.", dims=("nPulses",)),
+        _r("mapSnapshotPulses", "array", None,
+           "1-based pulses after which a surface map was kept: the "
+           "mapSnapshotPulses config clipped to nPulses. Empty when "
+           "none were requested.", dims=("mapSnapshotPulses",)),
+        _r("mapSnapshotTimes_s", "array", "s",
+           "Time at the end of each kept pulse's period.",
+           dims=("mapSnapshotPulses",)),
+        _r("TsurfSnapshots_C", "array", "degC",
+           "Surface temperature map after each kept pulse.",
+           dims=("mapSnapshotPulses", "yGrid", "xGrid")),
         _r("peakT_C", "scalar", "degC",
            "Largest temperature anywhere on the map."),
+        _r("peakTl_C", "scalar", "degC",
+           "Same value as peakT_C under the cross-solver name."),
         _r("pulseSpacing", "scalar", "m",
            "Distance the beam moves between pulses, v_scan/f_rep."),
         _r("simDuration_s", "scalar", "s",
@@ -956,28 +1182,38 @@ RESULTS: dict[str, tuple[ResultField, ...]] = {
         _r("meanInvFraction", "scalar", None,
            "Mean inversion as a fraction of the electron excursion."),
         _r("invMaxPerPulse_K", "array", "K",
-           "Largest surface Tl - Te within each pulse."),
+           "Largest surface Tl - Te within each pulse.",
+           dims=("nPulses",)),
         _r("TePeak_C", "array", "degC",
-           "Peak surface electron temperature, one per pulse."),
+           "Peak surface electron temperature, one per pulse.",
+           dims=("nPulses",)),
         _r("TlPeak_C", "array", "degC",
-           "Peak surface lattice temperature, one per pulse."),
+           "Peak surface lattice temperature, one per pulse.",
+           dims=("nPulses",)),
         _r("Tbase_C", "array", "degC",
-           "Baseline temperature each pulse started from."),
+           "Baseline temperature each pulse started from.",
+           dims=("nPulses",)),
         _r("Teq_C", "array", "degC",
-           "Post-pulse equilibrium temperature, one per pulse."),
+           "Post-pulse equilibrium temperature, one per pulse.",
+           dims=("nPulses",)),
         _r("Tresid_C", "array", "degC",
-           "Residual temperature after each inter-pulse diffusion."),
+           "Residual temperature after each inter-pulse diffusion.",
+           dims=("nPulses",)),
         _r("tMaxInv_s", "array", "s",
-           "Time of the largest inversion per pulse. NaN where none."),
+           "Time of the largest inversion per pulse. NaN where none.",
+           dims=("nPulses",)),
         _r("tOnset_s", "array", "s",
-           "Inversion onset per pulse. NaN where none."),
+           "Inversion onset per pulse. NaN where none.",
+           dims=("nPulses",)),
         _r("invDuration_s", "array", "s",
-           "Inversion duration per pulse. Zero where none."),
+           "Inversion duration per pulse. Zero where none.",
+           dims=("nPulses",)),
         _r("Te_atMaxInv_C", "array", "degC",
            "Electron temperature at the largest inversion. NaN where "
-           "none."),
+           "none.", dims=("nPulses",)),
         _r("Tl_atMaxInv_C", "array", "degC",
-           "Lattice temperature at the largest inversion. NaN where none."),
+           "Lattice temperature at the largest inversion. NaN where none.",
+           dims=("nPulses",)),
         _r("peakTe_C", "scalar", "degC",
            "Peak surface electron temperature, from the depth run."),
         _r("peakTl_C", "scalar", "degC",
@@ -1014,9 +1250,16 @@ def effective_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
 
     This is what every solver returns as ``resolvedConfig``, and the same
     merge validate_config reports as ``resolved``. None and empty values
-    fall back to the default, exactly as get_cfg_field treats them.
+    fall back to the default, exactly as get_cfg_field treats them. With
+    ``nPulses`` given and ``simDuration`` not, the duration becomes
+    nPulses / f_rep, which is the duration the solver runs.
     """
     return _effective(solver_schema(solver_id), cfg)
+
+
+def _is_empty(value: Any) -> bool:
+    return value is None or (isinstance(value, (str, list, tuple, dict))
+                             and len(value) == 0)
 
 
 def _effective(sch: SolverSchema, cfg: dict | None) -> dict[str, Any]:
@@ -1026,12 +1269,43 @@ def _effective(sch: SolverSchema, cfg: dict | None) -> dict[str, Any]:
     exactly as config.get_cfg_field treats it at the solver's own read sites.
     """
     merged = sch.defaults()
+    given: set[str] = set()
     for key, value in (cfg or {}).items():
-        if value is None or (isinstance(value, (str, list, tuple, dict))
-                             and len(value) == 0):
+        if _is_empty(value):
             continue
         merged[key] = value
+        given.add(key)
+    if ("nPulses" in merged and not _is_empty(merged.get("nPulses"))
+            and "simDuration" in merged and "simDuration" not in given):
+        try:
+            merged["simDuration"] = (float(merged["nPulses"])
+                                     / float(merged["f_rep"]))
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
     return merged
+
+
+def pulse_count(solver_id: str, cfg: dict | None = None) -> int:
+    """The number of pulses a config fires, the way the solver counts them.
+
+    nPulses when given; otherwise round(simDuration * f_rep), or
+    round(scanLength / v_scan * f_rep) for the scanning solver, and always
+    1 for single_pulse.
+    """
+    sch = solver_schema(solver_id)
+    return _pulse_count(sch, _effective(sch, cfg))
+
+
+def _pulse_count(sch: SolverSchema, merged: dict[str, Any]) -> int:
+    if sch.id == "single_pulse":
+        return 1
+    if sch.id == "scanning_beam":
+        v_scan = float(merged.get("v_scan") or 1.0)
+        return _matlab_round(
+            float(merged["scanLength"]) / v_scan * float(merged["f_rep"]))
+    if not _is_empty(merged.get("nPulses")):
+        return int(merged["nPulses"])
+    return _matlab_round(float(merged["simDuration"]) * float(merged["f_rep"]))
 
 
 def require_pulses(solver_id: str, n_pulses: int) -> None:
@@ -1047,45 +1321,157 @@ def require_pulses(solver_id: str, n_pulses: int) -> None:
         fix = ("Lengthen scanLength, lower v_scan, or raise f_rep so that "
                "scanLength / v_scan * f_rep is at least 1.")
     else:
-        fix = ("Raise simDuration to at least one pulse period, 1 / f_rep. "
-               "For N pulses use simDuration = N / f_rep.")
+        fix = ("Raise simDuration to at least one pulse period, 1 / f_rep, "
+               "or set nPulses. For N pulses use nPulses = N.")
     raise ValueError(
         f"{solver_id} was asked to simulate 0 pulses, so there is nothing to "
         f"solve. {fix}")
+
+
+def derived_quantities(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
+    """The pulse-train numbers a config implies, without running anything.
+
+    Pulse energy, peak and absorbed fluence, period, pulse count and, for
+    the scanning solver, the pulse spacing. These are the quantities that
+    expose a mistaken Pavg and f_rep pair before a run is spent on it.
+    """
+    sch = solver_schema(solver_id)
+    return _derived(sch, _effective(sch, cfg))
+
+
+def _derived(sch: SolverSchema, merged: dict[str, Any]) -> dict[str, Any]:
+    pavg = float(merged["Pavg"])
+    f_rep = float(merged["f_rep"])
+    w = float(merged["spotRadius"])
+    absorbance = float(merged["absorbance"])
+    ep = pavg / f_rep
+    f_peak = 2.0 * ep / (math.pi * w**2)
+    out: dict[str, Any] = {
+        "pulseEnergy_J": ep,
+        "peakFluence_J_m2": f_peak,
+        "peakFluence_J_cm2": f_peak / 1e4,
+        "absorbedFluence_J_m2": absorbance * f_peak,
+        "period_s": 1.0 / f_rep,
+        "nPulses": _pulse_count(sch, merged),
+    }
+    if sch.id == "scanning_beam":
+        v_scan = float(merged["v_scan"])
+        out["pulseSpacing_m"] = v_scan / f_rep
+        out["simDuration_s"] = float(merged["scanLength"]) / v_scan
+    elif sch.id != "single_pulse":
+        out["simDuration_s"] = float(merged["simDuration"])
+    return out
+
+
+def _material_record(merged: dict[str, Any]):
+    """The material preset a config names, or None for custom or unknown.
+
+    Imported lazily: materials.py needs NumPy, and discovery must stay
+    light. It never imports the jitted kernels at module load.
+    """
+    key = str(merged.get("material") or "W").lower()
+    if key == "custom":
+        return None
+    from .materials import MATERIALS
+
+    return MATERIALS.get(key)
+
+
+def _ablation_threshold(merged: dict[str, Any]) -> float | None:
+    """Threshold fluence [J/m^2] the validity checks compare against."""
+    override = merged.get("ablationThreshold")
+    if not _is_empty(override):
+        return float(override)
+    mat = _material_record(merged)
+    return None if mat is None else mat.f_ablation
+
+
+def _coast_fourier(sch: SolverSchema, merged: dict[str, Any]):
+    """(Fourier number, substeps needed for 0.5) of the inter-pulse coast.
+
+    None for solvers without a depth coast on a fixed step count.
+    """
+    if sch.id not in ("surface_point", "depth_profile", "scanning_beam",
+                      "inversion_quantifier"):
+        return None
+    mat = _material_record(merged)
+    if mat is None:
+        k_total = float(merged.get("kl_manual") or 174.0)
+        cl = float(merged.get("Cl_manual") or 2.54e6)
+    else:
+        k_total = float(merged.get("kl") or mat.k_total)
+        cl = float(merged.get("Cl") or mat.cl)
+    alpha = k_total / cl
+    if sch.id in ("depth_profile", "inversion_quantifier"):
+        dz = float(merged["dzTarget_diff"])
+    elif sch.id == "scanning_beam":
+        dz = min(float(merged["dzTarget"]), float(merged["Leff"]))
+    else:
+        dz = float(merged["dzTarget"])
+    trep = 1.0 / float(merged["f_rep"])
+    n_diff = int(merged["Ndiff"])
+    fourier = alpha * (trep / n_diff) / dz**2
+    needed = max(n_diff, math.ceil(alpha * trep / (0.5 * dz**2)))
+    return fourier, needed
+
+
+# Seconds the first solver call in a process spends compiling and loading
+# the jitted kernels from the on-disk cache. Not in estRuntime_s. Without
+# the cache, the first run in a fresh environment takes up to a minute.
+WARMUP_S = {"depth_profile": 3.0, "inversion_quantifier": 3.0,
+            "single_pulse": 3.0}
+_DEFAULT_WARMUP_S = 1.0
+
+# The depth family's fine stage integrates a window of
+# min(0.9 / f_rep, max(200 tau, 500 ps)) with steps capped at tau, so its
+# cost per pulse scales with that step count. seconds_per_pulse is
+# calibrated at this many steps.
+_CALIBRATED_FINE_STEPS = 1000.0
+
+
+def _fine_steps_per_pulse(merged: dict[str, Any]) -> float:
+    tau = float(merged["tau_FWHM"])
+    trep = 1.0 / float(merged["f_rep"])
+    relax = min(0.9 * trep, max(200.0 * tau, 500e-12))
+    return max(relax / tau, 1.0)
 
 
 def estimate_run(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
     """Pulse count and rough runtime for a config, without running anything.
 
     The runtime is a coarse per-solver rate, meant for choosing between a
-    blocking call and a background job, not for benchmarking.
+    blocking call and a background job, not for benchmarking. It covers
+    the solve and, when the history is kept and written, the report; the
+    first call in a process adds warmup_s on top.
     """
     sch = solver_schema(solver_id)
     merged = _effective(sch, cfg)
+    n_pulses = _pulse_count(sch, merged)
 
-    if sch.id == "single_pulse":
-        n_pulses = 1
-    elif sch.id == "scanning_beam":
-        v_scan = float(merged.get("v_scan") or 1.0)
-        n_pulses = _matlab_round(
-            float(merged["scanLength"]) / v_scan * float(merged["f_rep"]))
-    else:
-        n_pulses = _matlab_round(
-            float(merged["simDuration"]) * float(merged["f_rep"]))
-
+    rate = sch.seconds_per_pulse
     if sch.id == "radial_profile" and str(
             merged.get("radialSolveMode", "scale")).lower() == "independent":
-        rate = sch.seconds_per_pulse * float(merged.get("Nr") or 80)
-    else:
-        rate = sch.seconds_per_pulse
+        rate *= float(merged.get("Nr") or 80)
+    if sch.id in ("depth_profile", "inversion_quantifier"):
+        rate *= _fine_steps_per_pulse(merged) / _CALIBRATED_FINE_STEPS
 
+    history = bool(merged.get("storeHistory", False)
+                   and merged.get("writeReport", True)
+                   and merged.get("reportHistory", True))
     seconds = n_pulses * rate
+    if history:
+        seconds += n_pulses * sch.history_seconds_per_pulse
     return {
         "solver": sch.id,
         "nPulses": n_pulses,
         "estRuntime_s": round(seconds, 1),
+        "warmup_s": WARMUP_S.get(sch.id, _DEFAULT_WARMUP_S),
+        "historyIncluded": history,
         "recommend": "run_quick" if seconds < 45 else "start_run",
-        "basis": "coarse per-solver rate; order of magnitude only",
+        "basis": "coarse per-solver rate scaled by the fine-stage step "
+                 "count, plus the history table when it is written; "
+                 "order of magnitude only. warmup_s is the first call's "
+                 "kernel load, not included.",
     }
 
 
@@ -1149,12 +1535,79 @@ def _suggest_key(key: str, sch: SolverSchema) -> str:
     return (f"{sch.id} accepts: " + ", ".join(sorted(sch.params)) + ".")
 
 
+def _physics_warnings(sch: SolverSchema, resolved: dict[str, Any],
+                      derived: dict[str, Any]) -> list[dict[str, Any]]:
+    """Warnings a run would raise that the config alone already reveals."""
+    out: list[dict[str, Any]] = []
+
+    threshold = _ablation_threshold(resolved)
+    f_peak = derived["peakFluence_J_m2"]
+    if threshold is not None and f_peak > threshold:
+        out.append({
+            "code": "above_ablation", "key": "Pavg", "value": resolved["Pavg"],
+            "message": f"Peak fluence {f_peak / 1e4:.3g} J/cm^2 exceeds the "
+                       f"single-shot ablation threshold of "
+                       f"{str(resolved.get('material', 'W')).upper()} "
+                       f"({threshold / 1e4:.2g} J/cm^2). The model has no "
+                       "ablation, so the run will describe deposited "
+                       "energy, not the material's response.",
+            "suggestion": "Lower Pavg, raise f_rep, or enlarge spotRadius "
+                          "to bring the peak fluence under the threshold, "
+                          "or set ablationThreshold to your own value.",
+        })
+
+    if (sch.id not in ("single_pulse", "scanning_beam")
+            and _is_empty(resolved.get("nPulses"))):
+        periods = float(resolved["simDuration"]) * float(resolved["f_rep"])
+        n = _matlab_round(periods)
+        if n >= 1 and abs(periods - n) > 1e-6 * max(1.0, n):
+            out.append({
+                "code": "truncated_period", "key": "simDuration",
+                "value": resolved["simDuration"],
+                "message": f"simDuration is {periods:.4g} pulse periods: "
+                           f"{n} pulse(s) fire and the run ends at "
+                           f"{periods:.4g} periods, so the last period is "
+                           "not a whole one.",
+                "suggestion": "Set nPulses to fire a chosen count; "
+                              "simDuration then only sets where the last "
+                              "coast ends.",
+            })
+
+    coast = _coast_fourier(sch, resolved)
+    if coast is not None and coast[0] > 0.5:
+        fourier, needed = coast
+        if sch.id == "scanning_beam":
+            message = (f"Ndiff = {resolved['Ndiff']} gives a depth-coast "
+                       f"Fourier number of {fourier:.2g}. The samples early "
+                       "in each coast are under-resolved; the end-of-period "
+                       "state is not affected. This solver does not raise "
+                       "Ndiff on its own.")
+            suggestion = f"Set Ndiff to at least {needed} for 0.5."
+        else:
+            message = (f"Ndiff = {resolved['Ndiff']} gives a coast Fourier "
+                       f"number of {fourier:.2g}, so the solver will use "
+                       f"about {needed} substeps per period instead to "
+                       "keep it at 0.5. The end-of-period residual is the "
+                       "same to a few millikelvin either way.")
+            suggestion = (f"Set Ndiff to {needed} or more to silence this, "
+                          "or leave it to the solver.")
+        out.append({
+            "code": "coarse_coast", "key": "Ndiff", "value": resolved["Ndiff"],
+            "message": message, "suggestion": suggestion,
+        })
+    return out
+
+
 def validate_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
     """Check a config against a solver's schema without running anything.
 
     Returns ``ok``, ``errors``, ``warnings``, the ``resolved`` config with
-    defaults merged, and a runtime ``estimate``. Every problem is reported
-    at once, each with a machine-readable ``code`` and a suggested fix.
+    defaults merged, the ``derived`` pulse-train quantities (pulse energy,
+    peak and absorbed fluence, period, pulse count) and a runtime
+    ``estimate``. Every problem is reported at once, each with a
+    machine-readable ``code`` and a suggested fix. The estimate and the
+    derived block are given whenever the laser keys allow them, even when
+    an unrelated key is in error.
     """
     sch = solver_schema(solver_id)
     cfg = dict(cfg or {})
@@ -1171,8 +1624,7 @@ def validate_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
             })
             continue
 
-        if value is None or (isinstance(value, (str, list, tuple, dict))
-                             and len(value) == 0):
+        if _is_empty(value):
             continue  # MATLAB empty semantics: falls back to the default
 
         if spec.kind == "enum" and spec.choices:
@@ -1221,7 +1673,17 @@ def validate_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
                 })
 
     resolved = _effective(sch, cfg)
-    estimate = estimate_run(sch.id, cfg) if not errors else None
+
+    # The derived quantities and the estimate need only the laser keys, so
+    # an error elsewhere in the config does not cost the caller either.
+    derived = None
+    estimate = None
+    try:
+        derived = _derived(sch, resolved)
+        estimate = estimate_run(sch.id, cfg)
+    except (TypeError, ValueError, ZeroDivisionError, KeyError):
+        derived = None
+        estimate = None
 
     # A config that rounds to no pulses at all is not runnable: the pulse loop
     # never executes and the solver fails later on an empty result. Catch it
@@ -1232,7 +1694,7 @@ def validate_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
                    "scanLength / v_scan * f_rep is at least 1.")
         else:
             fix = ("Raise simDuration to at least one pulse period, "
-                   "1 / f_rep. For N pulses use simDuration = N / f_rep.")
+                   "1 / f_rep, or set nPulses = N for N pulses.")
         errors.append({
             "code": "no_pulses",
             "key": "scanLength" if sch.id == "scanning_beam" else "simDuration",
@@ -1243,6 +1705,12 @@ def validate_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
             "suggestion": fix,
         })
         estimate = None
+
+    if derived is not None:
+        try:
+            warnings.extend(_physics_warnings(sch, resolved, derived))
+        except (TypeError, ValueError, ZeroDivisionError, KeyError):
+            pass
 
     if estimate and estimate["estRuntime_s"] > 600:
         warnings.append({
@@ -1260,6 +1728,7 @@ def validate_config(solver_id: str, cfg: dict | None = None) -> dict[str, Any]:
         "errors": errors,
         "warnings": warnings,
         "resolved": resolved,
+        "derived": derived,
         "estimate": estimate,
     }
 
@@ -1313,6 +1782,7 @@ def materials_table() -> list[dict[str, Any]]:
             "G": mat.g_ep,
             "kTotal": mat.k_total,
             "T_melt_C": mat.t_melt_c,
+            "ablationThreshold": mat.f_ablation,
             "ke0": mat.ke0,
             "kl": mat.kl,
             "alpha_opt": mat.alpha_opt,
@@ -1328,4 +1798,5 @@ UNITS = {
     "gamma": "J m^-3 K^-2", "Cl": "J m^-3 K^-1", "G": "W m^-3 K^-1",
     "kTotal": "W m^-1 K^-1", "ke0": "W m^-1 K^-1", "kl": "W m^-1 K^-1",
     "alpha_opt": "1/m", "delta_opt": "m", "T_melt_C": "degC",
+    "ablationThreshold": "J/m^2",
 }

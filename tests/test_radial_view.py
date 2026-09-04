@@ -17,11 +17,13 @@ BASE = {
     "material": "W", "Pavg": 40, "spotRadius": 100e-6, "f_rep": 18e6,
     "tau_FWHM": 500e-15, "simDuration": 3 / 18e6,
     "Nz": 60, "Lz": 400e-9, "makePlots": False,
+    "enableRadialProfile": True,   # off by default since 0.4.0
 }
 
 RADIAL_KEYS = ("radialGrid_um", "radialFluenceRatio",
                "radialSurfaceProfiles_C", "crossSection_C",
-               "lateralDiffusionLength_m")
+               "crossSections_C", "lateralDiffusionLength_m",
+               "lateralDiffusionRatio")
 
 
 @pytest.fixture(scope="module")
@@ -78,10 +80,35 @@ def test_disabling_it_really_disables_it(tmp_path):
         assert key not in results
 
 
+def test_it_is_off_by_default(tmp_path):
+    cfg = {k: v for k, v in BASE.items() if k != "enableRadialProfile"}
+    results = depth_profile_solver({**cfg, "outputDir": str(tmp_path)})
+    assert "crossSection_C" not in results
+    assert results["resolvedConfig"]["enableRadialProfile"] is False
+
+
+def test_cross_sections_are_the_time_resolved_cross_section(results):
+    """A snapshot at the last pulse equals crossSection_C, and every
+    snapshot is a radius-by-depth map on the same grids."""
+    stack = results["crossSections_C"]
+    assert stack.shape == (results["profileSnapshotPulses"].size,
+                           results["radialGrid_um"].size,
+                           results["zGridDiff_m"].size)
+    np.testing.assert_array_equal(stack[-1], results["crossSection_C"])
+    assert results["lateralDiffusionRatio"] == pytest.approx(
+        results["lateralDiffusionLength_m"] / BASE["spotRadius"])
+
+
 def test_accuracy_warning_reaches_callers_who_never_asked_for_figures(tmp_path):
     """Lateral diffusion above 10% of the spot invalidates the scaling."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        depth_profile_solver({**BASE, "spotRadius": 5e-6,
-                              "outputDir": str(tmp_path)})
+        res = depth_profile_solver({**BASE, "spotRadius": 5e-6,
+                                    "outputDir": str(tmp_path)})
     assert any("Lateral diffusion" in str(w.message) for w in caught)
+    assert "lateral_diffusion" in [d["code"] for d in res["diagnostics"]]
+    # The threshold is a config key, so the same run can be told it is fine.
+    quiet = depth_profile_solver({**BASE, "spotRadius": 5e-6,
+                                  "lateralDiffusionWarnRatio": 100.0,
+                                  "outputDir": str(tmp_path / "quiet")})
+    assert "lateral_diffusion" not in [d["code"] for d in quiet["diagnostics"]]

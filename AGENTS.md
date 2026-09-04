@@ -21,7 +21,17 @@ sanctioned deviation is the energy-conserving pulse deposit in
 `physics.deposit_pulse` (0.2.0): the fixtures pin the MATLAB behavior
 through `legacyDeposit: True`, and
 `tests/test_energy_conserving_deposit.py` pins the default. Do not add a
-second deviation without the owner's explicit decision.
+second deviation without the owner's explicit decision. Two 0.4.0 changes
+sit next to that rule and are documented so nobody undoes them by
+accident: `physics.refine_peak` fits the inversion peak parabola in time
+relative to the middle sample, because the MATLAB form in absolute time
+cancelled catastrophically a millisecond into a train and produced
+spikes of exactly 256 K and 512 K; and `Ndiff` is a floor in
+`surface_point` and `depth_profile`, as it always was in
+`radial_profile`, raised to hold the coast Fourier number at 0.5. The
+fixture cases still pass at their tolerances, 1e-6 relative for the 0D
+solvers, because the end-of-period state is insensitive to the count.
+`scanning_beam` keeps the exact count; do not extend the floor there.
 
 **The public API is additive only.** The six entry points, the config-dict
 convention, and every existing results key are consumed by PyPI users, the
@@ -76,6 +86,26 @@ the owner's decision. Do not reintroduce a fit, a projection, a results key,
 a report line, a figure annotation or a sentence in the docs that speaks of
 steady state. Report what was simulated: `TresidVals_C` and `finalResid_C`.
 
+**Every array key declares its axes.** A `ResultField` of kind `array`
+carries `dims`, one results key per axis: an array key is the coordinate
+along that axis, the scalar `nPulses` is a length. `tests/test_contract_axes.py`
+holds every live array to its declaration for every gating combination,
+so an array without a grid, or a 2D map whose axis order is only prose,
+fails the suite. Add the coordinate key in the same commit as the array.
+
+**Run diagnostics carry codes.** Build them with `physics.diagnostic` and
+`physics.validity_diagnostics`, never as bare strings. `diagnostics` is
+the list of dicts, `warnings` is derived from it, and an `info` level
+entry such as `coast_steps_raised` never becomes a warning or a
+`warnings.warn`. The codes are named in the schema's `diagnostics` row;
+add a new one there in the same commit.
+
+**Console and report switches go through `reporting.py`.** `console`
+implements `verbose`, `report_file` implements `writeReport`, and the XY
+table checks `reportHistory`. Never add a bare `open()` for a report or
+an unconditional per-pulse print: `showProgress: False` silences those
+lines.
+
 **Physics does not belong in `plotting.py`.** Anything computed there is
 silently lost whenever `makePlots` is false, which is the default for both
 the CLI and the MCP server. This has already caused one real bug.
@@ -99,13 +129,14 @@ laserttm list                      # solvers, and which one answers which questi
 laserttm describe depth_profile    # every config and results key, with units
 laserttm describe depth_profile --section results   # results keys alone
 laserttm materials                 # material presets
-laserttm validate cfg.json         # check a config without running it
+laserttm validate cfg.json         # check a config, see its fluence and pulse count
 laserttm run cfg.json --dry-run    # validate and report the cost
 laserttm schema depth_profile      # JSON Schema, for typed consumers
 ```
 
 The same surface exists in Python as `describe_solver`, `describe_results`,
-`validate_config`, `estimate_run`, `json_schema` and `list_solvers`, and
+`validate_config`, `derived_quantities`, `pulse_count`, `estimate_run`,
+`json_schema` and `list_solvers`, and
 over MCP as tools of those names. `docs/results-contract.md` is generated
 from the same registry. If `describe` does not show a key, that is a schema
 bug to fix, not a lookup to work around; a solver key without a

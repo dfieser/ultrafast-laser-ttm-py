@@ -26,7 +26,6 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from .config import get_cfg_field
-from .kernels import KHYBRID_W_K, KHYBRID_W_T
 
 
 @dataclass(frozen=True)
@@ -47,6 +46,10 @@ class Material:
     kl: float | None = None         # lattice conductivity term  [W m^-1 K^-1]
     alpha_opt: float | None = None  # optical absorption coeff   [m^-1]
     measured_k_table: bool = False  # a tabulated k(T) curve exists
+    # Single-shot femtosecond ablation threshold, peak fluence [J m^-2].
+    # None where no sourced value is carried; the validity checks then
+    # stay silent unless the config supplies ablationThreshold.
+    f_ablation: float | None = None
 
     @property
     def has_optical(self) -> bool:
@@ -79,16 +82,20 @@ class Material:
             "alpha_opt_1_m": self.alpha_opt,
             "delta_opt_m": self.delta_opt,
             "Tmelt_C": self.t_melt_c,
+            "ablationThreshold_J_m2": self.f_ablation,
             "kModel": k_model,
         }
 
 
 # Melting points are the accepted handbook values; every other number is the
 # value the per-solver preset tables carried before they were merged here.
+# Tungsten's ablation threshold is the single-shot femtosecond value of
+# 0.44 J/cm^2 (Appl. Phys. A 101, 97 (2010), doi:10.1007/s00339-010-5766-1);
+# the other presets carry none rather than an unsourced number.
 MATERIALS: dict[str, Material] = {
     "w": Material("w", 137.3, 2.54e6, 1.65e17, 174.0, 3422.0,
                   ke0=150.0, kl=24.0, alpha_opt=5.88e7,
-                  measured_k_table=True),
+                  measured_k_table=True, f_ablation=4400.0),
     "cu": Material("cu", 98.0, 3.45e6, 0.90e17, 401.0, 1085.0,
                    ke0=390.0, kl=11.0, alpha_opt=7.09e7),
     "al": Material("al", 136.0, 2.42e6, 2.40e17, 237.0, 660.0,
@@ -237,6 +244,10 @@ def k_table(mat: Material, *, constant_only: bool = False
     table for solvers whose kernel expects a temperature-independent k.
     """
     if mat.measured_k_table and not constant_only:
+        # Imported here so that describing or validating a config never
+        # loads the jitted kernels.
+        from .kernels import KHYBRID_W_K, KHYBRID_W_T
+
         return KHYBRID_W_T.copy(), KHYBRID_W_K.copy()
     return _CONSTANT_K_T.copy(), np.array([mat.k_total, mat.k_total])
 

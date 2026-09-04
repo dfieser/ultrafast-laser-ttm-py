@@ -19,10 +19,14 @@ from .physics import INV_THRESHOLD_K
 from .reporting import (
     apply_case_tag,
     case_tag,
+    console,
     filename_slug,
+    report_file,
+    report_switches,
     resolve_output_dir,
     write_header,
 )
+from .schema import defaults as schema_defaults
 from .schema import effective_config
 from .units import smart_energy, smart_freq, smart_length, smart_time
 
@@ -36,16 +40,16 @@ def _resolve_out_path(cfg, f_rep, tau_fwhm, pavg, spot_radius, n_pulses):
     out_filename = apply_case_tag(cfg, (
         f"Inversion_Analysis_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
         f"{n_pulses}p.txt"))
-    return output_dir, os.path.join(output_dir, out_filename)
+    write_report, _ = report_switches(cfg)
+    return output_dir, (os.path.join(output_dir, out_filename)
+                        if write_report else None)
 
 
-def inversion_quantifier(cfg: dict | None = None) -> dict:
-    """Run the inversion quantifier. Returns the v1 results dict."""
-    if cfg is None:
-        cfg = {}
+def _inversion_quantifier(cfg: dict) -> dict:
 
-    make_plots = get_cfg_field(cfg, "makePlots", True)
-    save_figures = get_cfg_field(cfg, "saveFigures", False)
+    d = schema_defaults("inversion_quantifier")
+    make_plots = get_cfg_field(cfg, "makePlots", d["makePlots"])
+    save_figures = get_cfg_field(cfg, "saveFigures", d["saveFigures"])
     if save_figures:
         make_plots = True
 
@@ -115,7 +119,7 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
         # real paths, so the contract's outputFile always exists.
         output_dir, out_path = _resolve_out_path(
             cfg, f_rep, tau_fwhm, pavg, spot_radius, n_pulses)
-        with open(out_path, "w", encoding="utf-8") as fid:
+        with report_file(out_path) as fid:
             write_header(fid, "Temperature Inversion Quantifier — Output")
             fid.write(f"--- Material: {str(material).upper()} ---\n\n")
             fid.write(f"  Pulses analyzed:  {n_pulses}\n")
@@ -125,7 +129,8 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
             fid.write("  Possible causes: pulse energy too low, spatial grid\n")
             fid.write("  too coarse to resolve it, or pulse width too long\n")
             fid.write("  for this femtosecond-scale phenomenon.\n")
-        print(f"  Output written to: {out_path}")
+        if out_path is not None:
+            print(f"  Output written to: {out_path}")
         return _build_results(
             cfg, dr, n_pulses, material, inv_max, te_peak, tl_peak,
             tbase, teq, tresid, t_max_inv, t_onset, inv_dur, te_at_inv, tl_at_inv,
@@ -193,7 +198,7 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
     ep_v, ep_u = smart_energy(pavg / f_rep)
     spot_v, spot_u = smart_length(spot_radius)
 
-    with open(out_path, "w", encoding="utf-8") as fid:
+    with report_file(out_path) as fid:
         write_header(fid, "Temperature Inversion Quantifier — Output")
         fid.write(f"--- Material: {str(material).upper()} ---\n")
         fid.write(f"  gamma  = {gamma_mat:.2f}  J m^-3 K^-2\n")
@@ -250,7 +255,8 @@ def inversion_quantifier(cfg: dict | None = None) -> dict:
                       f"{tl_peak[p]:12.2f}  {teq[p]:12.2f}  {tresid[p]:12.2f}  "
                       f"{inv_max[p]:14.3f}  {te_inv_str:>14}  {tl_inv_str:>14}  "
                       f"{dur_str:>12}\n")
-    print(f"\n  Output written to: {out_path}")
+    if out_path is not None:
+        print(f"\n  Output written to: {out_path}")
 
     # ==================  Plots  =============================================
     if make_plots:
@@ -288,6 +294,15 @@ def _build_results(cfg, dr, n_pulses, material, inv_max, te_peak, tl_peak,
         # from an older laserttm.
         "materialProps": dr.get("materialProps"),
         "warnings": list(dr.get("warnings", [])),
+        "diagnostics": list(dr.get("diagnostics", [])),
+        "Tmelt_C": dr.get("Tmelt_C", (dr.get("materialProps") or {}).get(
+            "Tmelt_C")),
+        "meltDetected": bool(dr.get("meltDetected", False)),
+        "meltPulse": int(dr.get("meltPulse", 0)),
+        "pulseEnergy_J": dr.get("pulseEnergy_J", dr["Pavg"] / dr["f_rep"]),
+        "peakFluence_J_m2": dr.get("peakFluence_J_m2", dr["F_peak"]),
+        "absorbedFluence_J_m2": dr.get(
+            "absorbedFluence_J_m2", dr["absorbance"] * dr["F_peak"]),
         "invThreshold_K": _INV_THRESHOLD_K,
         "nPulses": n_pulses,
         "nInvPulses": n_inv_pulses,
@@ -322,3 +337,10 @@ def _build_results(cfg, dr, n_pulses, material, inv_max, te_peak, tl_peak,
         "depthResults": dr,
         "depthOutputFile": dr["outputFile"],
     }
+
+
+def inversion_quantifier(cfg: dict | None = None) -> dict:
+    """Run the inversion quantifier. Returns the v1 results dict."""
+    cfg = {} if cfg is None else cfg
+    with console(cfg):
+        return _inversion_quantifier(cfg)

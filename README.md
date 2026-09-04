@@ -109,7 +109,7 @@ cfg = {
     "f_rep": 5e6,               # repetition rate [Hz]
     "tau_FWHM": 500e-15,        # pulse width, FWHM [s]
 }
-cfg["simDuration"] = 50 / cfg["f_rep"]   # simulate 50 pulses
+cfg["nPulses"] = 50                # simulate 50 pulses
 
 results = surface_point_solver(cfg)
 ```
@@ -148,7 +148,7 @@ describe_results("depth_profile")    # every results key with unit and meaning
 validate_config("depth_profile", cfg)  # check a config in milliseconds
 ```
 
-`validate_config` reports every problem at once and names the fix. A key with the wrong case, a key belonging to a different solver, and a value that looks like microns rather than metres are all caught before a run starts rather than being silently ignored.
+`validate_config` reports every problem at once and names the fix. A key with the wrong case, a key belonging to a different solver, and a value that looks like microns rather than metres are all caught before a run starts rather than being silently ignored. It also returns the pulse energy, peak and absorbed fluence and pulse count the config implies, and warns when the peak fluence is past the material's single-shot ablation threshold, when `simDuration` is not a whole number of periods, or when the inter-pulse diffusion step count will be raised.
 
 The MATLAB repo's [project wiki](https://github.com/dfieser/ultrafast-laser-ttm-toolbox/wiki) covers the model physics. The config fields carry over one-to-one.
 
@@ -163,13 +163,21 @@ The MATLAB repo's [project wiki](https://github.com/dfieser/ultrafast-laser-ttm-
 | Inversion analysis | [inversion_quantifier.py](src/laserttm/inversion_quantifier.py) | per-pulse inversion magnitude, onset, and duration statistics | quantifying the Tl > Te inversion across pulses |
 | Scanning beam | [scanning_beam.py](src/laserttm/scanning_beam.py) | 2D surface temperature under a moving beam | translating stationary results to a scanned process |
 
-All six return a results dict with a shared envelope: `solver`, `solverId`, `contractVersion`, `material`, `nPulses`, `wallTime_s`, `outputFile`, `outputDir`, `inputConfig`, plus `resolvedConfig` with the config actually in force, `materialProps` with the resolved material record, `warnings`, and `caseTag`. Every key each solver returns is documented in [docs/results-contract.md](docs/results-contract.md), generated from the same registry `describe_results` reads. Every MATLAB toolbox field carries over with its original spelling.
+All six return a results dict with a shared envelope: `solver`, `solverId`, `contractVersion`, `material`, `nPulses`, `wallTime_s`, `outputFile`, `outputDir`, `inputConfig`, plus `resolvedConfig` with the config actually in force, `materialProps` with the resolved material record, `warnings`, and `caseTag`. Since 0.4.0 the envelope also carries `diagnostics`, the same warnings with a machine-readable code each, the melting-point check `Tmelt_C`, `meltDetected` and `meltPulse`, and the derived `pulseEnergy_J`, `peakFluence_J_m2` and `absorbedFluence_J_m2`. Every array key declares its axes, so `describe_results` says which axis of a snapshot is depth and which is time. Every key each solver returns is documented in [docs/results-contract.md](docs/results-contract.md), generated from the same registry `describe_results` reads. Every MATLAB toolbox field carries over with its original spelling.
+
+**Pulse count:** `nPulses` fires a chosen number of pulses. Without it the count is `round(simDuration * f_rep)` and a fractional last period is coasted but never fired, which `validate_config` now points out. With `nPulses` set, `simDuration` only decides where the last coast ends and defaults to `nPulses / f_rep`.
+
+**Diagnostics:** every solver compares its peak lattice temperature against the melting point and its peak fluence against the material's single-shot ablation threshold, tungsten's being 0.44 J/cm^2, and reports both under `diagnostics` with the codes `above_melting` and `above_ablation`. The model has no phase change or ablation, so a run past either limit describes deposited energy, not the material.
+
+**Time-resolved output:** the depth solver returns its first-pulse depth snapshots at exactly the requested `snapshotDelays`, keeps residual depth profiles at the pulses named in `profileSnapshotPulses`, and with `enableRadialProfile` derives `crossSections_C`, the radius-by-depth map after each of those pulses. The scanning solver keeps surface maps at `mapSnapshotPulses` and returns the beam position at every pulse in `beamX_m`, alongside Celsius twins of its kelvin maps.
 
 **Energy conservation:** since 0.2.0 the pulse deposit in the surface-point, radial and scanning solvers conserves the absorbed energy on any grid. The MATLAB reference raises the surface node to the post-pulse equilibrium temperature and lets the rise decay over `Leff`, which on a depth grid coarser than `Leff` injects roughly `(dz/2)/Leff` times the intended energy per pulse. At the library defaults that inflated heat accumulation by about 2.5x per pulse, and by an order of magnitude for nanometre-scale deposition layers. Set `legacyDeposit: True` to reproduce the MATLAB toolbox output exactly, which is how the golden-fixture tests run.
 
-**Long runs:** the surface-point, depth and radial solvers accept `storeHistory: False` to drop the per-pulse time histories, which are needed only for the timeline figures and the report's XY table. This bounds memory for accumulation studies past 100,000 pulses while leaving every physical result unchanged.
+**Long runs:** the surface-point, depth and radial solvers accept `storeHistory: False` to drop the per-pulse time histories, which are needed only for the timeline figures and the report's XY table. This bounds memory for accumulation studies past 100,000 pulses while leaving every physical result unchanged. `reportHistory: False` keeps the history in the results but leaves its table out of the text report, which is otherwise tens of megabytes for a few thousand pulses and takes longer to write than the solve. `writeReport: False` writes no report at all, and `verbose: False` keeps the console silent.
 
-**Progress popup:** the multi-pulse solvers show a waitbar with a live time estimate during interactive runs, matching the MATLAB toolbox. Set `showProgress: True` or `False` in the config to force it either way. When unset, the popup appears only for terminal runs with a display, so test suites, batch pipelines, and the MCP server stay headless. Setting the `LASERTTM_NO_PROGRESS` environment variable also disables it.
+**Coast resolution:** `Ndiff`, the Crank-Nicolson step count per inter-pulse period, is a floor. The surface-point, depth and radial solvers raise it as needed to hold the coast Fourier number at 0.5 and report the count used as `NdiffUsed`. The end-of-period residual is unchanged to a few millikelvin either way; what the raise fixes is the samples inside the first 100 ns of each coast, which were off by half at 1 MHz.
+
+**Progress popup:** the multi-pulse solvers show a waitbar with a live time estimate during interactive runs, matching the MATLAB toolbox. Set `showProgress: True` or `False` in the config to force it either way; `False` also silences the per-pulse progress lines on the console. When unset, the popup appears only for terminal runs with a display, so test suites, batch pipelines, and the MCP server stay headless. Setting the `LASERTTM_NO_PROGRESS` environment variable also disables it.
 
 ## Command line
 
@@ -186,7 +194,7 @@ laserttm schema radial_profile             # JSON Schema for typed consumers
 laserttm version
 ```
 
-Configs are validated before a run starts, so a mistyped key stops with a message naming the correction instead of quietly running on defaults.
+Configs are validated before a run starts, so a mistyped key stops with a message naming the correction instead of quietly running on defaults. `validate` and `run --dry-run` also print the pulse energy, peak fluence and pulse count the config implies, and the runtime estimate now accounts for the pulse width, the history table, and the kernel loading on the first call.
 
 A config file is the solver's cfg dict plus a `solver` key, with the same field names as the Python and MATLAB interfaces:
 
@@ -214,7 +222,7 @@ claude mcp add laserttm -- laserttm-mcp
 
 Because multi-pulse runs can take minutes, the server uses a job pattern. `start_run` launches a solver in a background worker process and returns a run id, `check_run` polls status with a log tail, and `get_results` returns the results summary once the run finishes. Full arrays land in `~/.laserttm/runs/<run_id>/results.npz`, and the `LASERTTM_RUNS_DIR` environment variable overrides that location. `run_quick` wraps the pattern for short runs, and `cancel_run` terminates a job.
 
-Three tools exist so a caller gets the config right the first time. `list_solvers` says which solver answers which question, `describe_solver` returns every accepted key with its unit, default and valid range, and `validate_config` checks a config in milliseconds and names the fix for anything wrong. `start_run` validates before spawning and reports the pulse count and estimated runtime, and `run_quick` refuses a run that cannot fit its timeout instead of returning a partial answer.
+Three tools exist so a caller gets the config right the first time. `list_solvers` says which solver answers which question, `describe_solver` returns every accepted key with its unit, default and valid range and every results key with its axes, and `validate_config` checks a config in milliseconds, names the fix for anything wrong, and returns the derived pulse energy and fluence. `start_run` validates before spawning and reports the pulse count and estimated runtime, and `run_quick` refuses a run that cannot fit its timeout instead of returning a partial answer.
 
 ## Validation against the MATLAB reference
 
@@ -224,8 +232,8 @@ Three tools exist so a caller gets the config right the first time. `list_solver
 - The solvers built on a stiff integrator are depth profile, single pulse, and inversion quantifier. These run MATLAB `ode15s` against SciPy `BDF`, the same solver family at the same tolerances, and agree at integrator-tolerance level with relative errors near 1e-4 on peak temperatures.
 
 ```bash
-python -m pytest                 # fast suite (~1 min)
-python -m pytest -m slow         # + the 36,000-pulse scanning baseline (~9 min)
+python -m pytest                          # fast suite (~2 min)
+python -m pytest -m "slow or not slow"    # + the 36,000-pulse scanning baseline (~9 min)
 python validation/benchmark.py   # wall-time comparison vs MATLAB
 ```
 

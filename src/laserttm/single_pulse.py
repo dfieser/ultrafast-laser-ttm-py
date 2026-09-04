@@ -22,11 +22,22 @@ from scipy.sparse import bmat, diags
 from .config import get_cfg_field
 from .kernels import profile_code, ttm_1d_rhs
 from .materials import k_model_name, k_table, resolve_material
-from .physics import INV_THRESHOLD_K, derive_laser, energy_mismatch_pct, validity_warnings
+from .physics import (
+    INV_THRESHOLD_K,
+    derive_laser,
+    diagnostic_messages,
+    energy_mismatch_pct,
+    melt_pulse,
+    validity_diagnostics,
+)
 from .reporting import (
+    NO_TABLE_NOTE,
     apply_case_tag,
     case_tag,
+    console,
     filename_slug,
+    report_file,
+    report_switches,
     resolve_output_dir,
     write_header,
     write_xy_table,
@@ -40,10 +51,7 @@ _DEFAULT_SNAPSHOT_DELAYS = (0.0, 0.5e-12, 1e-12, 2e-12, 5e-12, 10e-12, 50e-12, 2
 _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
 
-def single_pulse_visualizer(cfg: dict | None = None) -> dict:
-    """Run the single-pulse 1D TTM solver. Returns the v1 results dict."""
-    if cfg is None:
-        cfg = {}
+def _single_pulse(cfg: dict) -> dict:
 
     # Defaults come from the schema so there is one place to read them and
     # one place they can change. See schema.describe_solver('single_pulse').
@@ -164,8 +172,13 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
                 np.log10(post_delay), np.log10(coast_len), 400)
         else:
             t_log = np.empty(0)
+        # The requested snapshot instants join the output times, so each
+        # snapshot is taken exactly when asked rather than at the nearest
+        # sample. Output times never steer the integrator's steps.
+        t_snaps = t_pulse_center + snapshot_delays
+        t_snaps = t_snaps[(t_snaps >= t_period_start) & (t_snaps <= t_period_end)]
         t_out = np.unique(np.concatenate(
-            [[t_period_start], t_during, t_log, [t_period_end]]))
+            [[t_period_start], t_during, t_log, t_snaps, [t_period_end]]))
         t_out = t_out[(t_out >= t_period_start) & (t_out <= t_period_end)]
 
         # The source is identically zero beyond 10*tau from the pulse center
@@ -330,9 +343,11 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
     out_filename = apply_case_tag(cfg, (
         f"TTM1D_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
         f"{n_pulses}p_{pulse_profile_name}.txt"))
-    out_path = os.path.join(output_dir, out_filename)
+    write_report, report_history = report_switches(cfg)
+    out_path = (os.path.join(output_dir, out_filename) if write_report
+                else None)
 
-    with open(out_path, "w", encoding="utf-8") as fid:
+    with report_file(out_path) as fid:
         write_header(fid, "1D TTM Pulsed Laser Calculator — Output")
         fid.write(f"--- Material:  {str(material).upper()} ---\n")
         fid.write(f"  gamma  = {gamma:.2f}  J m^-3 K^-2\n")
@@ -369,13 +384,24 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
                       f"Tl_peak = {tl_peak_per_pulse[p] - 273.15:.0f} degC,  "
                       f"Tresid = {tresid_per_pulse[p] - 273.15:.1f} degC\n" for p in range(n_pulses))
         fid.write("\n")
-        write_xy_table(
-            fid,
-            "  Surface XY Data: Time (s) | Te_surf (degC) | Tl_surf (degC)",
-            ("Time_s", "Te_surf_degC", "Tl_surf_degC"),
-            ((all_times[i], all_te_surf[i] - 273.15,
-              all_tl_surf[i] - 273.15) for i in range(all_times.size)))
-    print(f"  Output written to: {out_path}\n")
+        if report_history:
+            write_xy_table(
+                fid,
+                "  Surface XY Data: Time (s) | Te_surf (degC) | Tl_surf (degC)",
+                ("Time_s", "Te_surf_degC", "Tl_surf_degC"),
+                ((all_times[i], all_te_surf[i] - 273.15,
+                  all_tl_surf[i] - 273.15) for i in range(all_times.size)))
+        else:
+            fid.write(NO_TABLE_NOTE)
+    if out_path is not None:
+        print(f"  Output written to: {out_path}\n")
+
+    melt_p = melt_pulse(tl_peak_per_pulse, mat.t_melt_c)
+    run_diags = validity_diagnostics(
+        tl_peak_all - 273.15, mat.t_melt_c, material, melt_pulse=melt_p,
+        peak_fluence=f_peak,
+        ablation_threshold=get_cfg_field(cfg, "ablationThreshold",
+                                         mat.f_ablation))
 
     if make_plots:
         from .plotting import plot_single_pulse
@@ -406,7 +432,14 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
         # constant_only mirrors the k_table call above: this solver runs
         # the flat table even for tungsten, and the record must say so.
         "materialProps": mat.props(k_model_name(mat, constant_only=True)),
-        "warnings": validity_warnings(tl_peak_all - 273.15, mat.t_melt_c, material),
+        "warnings": diagnostic_messages(run_diags),
+        "diagnostics": run_diags,
+        "Tmelt_C": mat.t_melt_c,
+        "meltDetected": melt_p > 0,
+        "meltPulse": melt_p,
+        "pulseEnergy_J": ep,
+        "peakFluence_J_m2": f_peak,
+        "absorbedFluence_J_m2": eabs_areal,
         "nPulses": n_pulses,
         "peakTe_C": te_peak_all - 273.15,
         "peakTl_C": tl_peak_all - 273.15,
@@ -440,3 +473,10 @@ def single_pulse_visualizer(cfg: dict | None = None) -> dict:
         "depthEnergy_J_m2": du_total,
         "energyMismatch_pct": energy_mismatch_pct(e_input, du_total),
     }
+
+
+def single_pulse_visualizer(cfg: dict | None = None) -> dict:
+    """Run the single-pulse 1D TTM solver. Returns the v1 results dict."""
+    cfg = {} if cfg is None else cfg
+    with console(cfg):
+        return _single_pulse(cfg)

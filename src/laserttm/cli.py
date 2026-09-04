@@ -63,7 +63,7 @@ def _cmd_describe(args: argparse.Namespace) -> int:
         print(json.dumps(described, indent=2, default=str))
         return 0
 
-    print(f"{described['id']} — {described['title']}")
+    print(f"{described['id']}: {described['title']}")
     print(f"\n{described['summary']}")
     print(f"\nUse when:  {described['whenToUse']}")
     print(f"Not when:  {described['whenNotToUse']}")
@@ -94,7 +94,9 @@ def _cmd_describe(args: argparse.Namespace) -> int:
                 flags += f"  (needs {spec['gatedBy']})"
             if spec.get("prefer"):
                 flags += f"  (prefer {spec['prefer']})"
-            print(f"\n  {spec['name']}{unit}  {spec['kind']}{flags}")
+            dims = spec.get("dims")
+            shape = f"  [{' x '.join(dims)}]" if dims else ""
+            print(f"\n  {spec['name']}{unit}  {spec['kind']}{shape}{flags}")
             print(f"      {spec['summary']}")
 
     if described.get("files"):
@@ -144,6 +146,21 @@ def _print_problems(report: dict) -> None:
             print(f"          {problem['suggestion']}", file=sys.stderr)
 
 
+def _print_derived(report: dict) -> None:
+    """The pulse-train numbers a config implies, so a wrong Pavg and f_rep
+    pair is visible before a run is spent on it."""
+    derived = report.get("derived")
+    est = report.get("estimate")
+    if derived:
+        print(f"  Pulse energy {derived['pulseEnergy_J']:.4g} J, peak fluence "
+              f"{derived['peakFluence_J_cm2']:.4g} J/cm^2, absorbed "
+              f"{derived['absorbedFluence_J_m2'] / 1e4:.4g} J/cm^2.")
+    if est:
+        print(f"  {est['nPulses']} pulses, roughly {est['estRuntime_s']:g} s "
+              f"plus about {est['warmup_s']:g} s of kernel loading on the "
+              "first call.")
+
+
 def _cmd_validate(args: argparse.Namespace) -> int:
     from . import schema
 
@@ -172,12 +189,11 @@ def _cmd_validate(args: argparse.Namespace) -> int:
         return 0 if report["ok"] else 2
 
     if report["ok"]:
-        est = report["estimate"]
         print(f"Config is valid for {report['solver']}.")
-        print(f"  {est['nPulses']} pulses, roughly {est['estRuntime_s']:g} s.")
     else:
         print(f"{len(report['errors'])} problem(s) with the config for "
               f"'{report['solver']}':", file=sys.stderr)
+    _print_derived(report)
     _print_problems(report)
     return 0 if report["ok"] else 2
 
@@ -217,10 +233,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"  [warning] {problem['message']}", file=sys.stderr)
 
     if args.dry_run:
-        est = report["estimate"]
-        print(f"Config is valid for {report['solver']}. "
-              f"{est['nPulses']} pulses, roughly {est['estRuntime_s']:g} s. "
-              "Nothing was run.")
+        print(f"Config is valid for {report['solver']}. Nothing was run.")
+        _print_derived(report)
         return 0
 
     # Batch-friendly default: no figure windows unless asked for.
@@ -312,7 +326,23 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _tolerant_console() -> None:
+    """Never let a narrow console encoding crash a listing.
+
+    Windows consoles often run cp1252, which cannot encode every character
+    in the schema text. Replacing the odd character beats a traceback.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _tolerant_console()
     args = build_parser().parse_args(argv)
     return args.func(args)
 

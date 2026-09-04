@@ -80,7 +80,7 @@ def test_depth_profile_results_identical(tmp_path):
 
     cfg = {"Pavg": 40, "f_rep": 18e6, "tau_FWHM": 500e-15,
            "simDuration": 3 / 18e6, "Nz": 60, "Lz": 400e-9,
-           "makePlots": False}
+           "makePlots": False, "enableRadialProfile": True}
     with_hist = depth_profile_solver(
         {**cfg, "outputDir": str(tmp_path / "a")})
     without = depth_profile_solver(

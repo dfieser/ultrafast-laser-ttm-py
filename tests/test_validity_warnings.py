@@ -42,8 +42,15 @@ def test_surface_point_warns_above_the_melting_point(tmp_path):
         warnings.simplefilter("always")
         res = _run("surface_point", cfg)
     assert res["peakTl_C"] > res["materialProps"]["Tmelt_C"]
-    assert len(res["warnings"]) == 1
+    # 0.50 J/cm^2 is past both the melting point and the 0.44 J/cm^2
+    # ablation threshold, and each concern is its own diagnostic.
+    codes = [d["code"] for d in res["diagnostics"] if d["level"] == "warning"]
+    assert codes == ["above_melting", "above_ablation"]
+    assert res["warnings"] == [d["message"] for d in res["diagnostics"]
+                               if d["level"] == "warning"]
     assert "melting point of W" in res["warnings"][0]
+    assert "ablation threshold" in res["warnings"][1]
+    assert res["meltDetected"] is True and res["meltPulse"] == 1
     assert any("melting point" in str(w.message) for w in caught)
 
 
@@ -51,7 +58,9 @@ def test_single_pulse_warns_above_the_melting_point(tmp_path):
     cfg = {**OUT_OF_RANGE, "makePlots": False, "outputDir": str(tmp_path)}
     res = _run("single_pulse", cfg)
     assert res["peakTl_C"] > res["materialProps"]["Tmelt_C"]
-    assert len(res["warnings"]) == 1
+    assert [d["code"] for d in res["diagnostics"]] == [
+        "above_melting", "above_ablation"]
+    assert res["meltPulse"] == 1
 
 
 def test_a_run_inside_the_model_stays_silent(tmp_path):
@@ -60,3 +69,6 @@ def test_a_run_inside_the_model_stays_silent(tmp_path):
     res = _run("surface_point", cfg)
     assert res["peakTl_C"] < res["materialProps"]["Tmelt_C"]
     assert res["warnings"] == []
+    assert res["meltDetected"] is False and res["meltPulse"] == 0
+    # Informational diagnostics never masquerade as warnings.
+    assert all(d["level"] == "info" for d in res["diagnostics"])

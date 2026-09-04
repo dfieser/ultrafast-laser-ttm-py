@@ -36,14 +36,20 @@ from .physics import (
     deposit_shape_weight,
     depth_deposit_shape,
     derive_laser,
+    diagnostic,
+    diagnostic_messages,
     equilibrate,
-    validity_warnings,
+    melt_pulse,
+    validity_diagnostics,
 )
 from .progress import ProgressReporter
 from .reporting import (
     apply_case_tag,
     case_tag,
+    console,
     filename_slug,
+    report_file,
+    report_switches,
     resolve_output_dir,
     write_header,
 )
@@ -128,6 +134,7 @@ class _Setup:
     # Run controls
     store_history: bool
     progress_interval: int
+    show_progress: bool | None
     early_stop_enabled: bool
     early_stop_check_interval: int
     early_stop_t_melt_c: float
@@ -245,7 +252,8 @@ def _solve_scale(s: _Setup, st: _State, progress: ProgressReporter) -> None:
         te_now = tr_surf[0]
         tl_now = tr_surf[0]
 
-        if (np_i + 1) % s.progress_interval == 0 or np_i + 1 == n_pulses:
+        if s.show_progress is not False and (
+                (np_i + 1) % s.progress_interval == 0 or np_i + 1 == n_pulses):
             print(f"    Pulse {np_i + 1}/{n_pulses}: "
                   f"Teq={teq - 273.15:.1f} C, Tresid={tr_surf[0] - 273.15:.1f} C")
         progress.update(np_i + 1)
@@ -363,7 +371,8 @@ def _solve_independent(s: _Setup, st: _State, progress: ProgressReporter) -> Non
         st.tresid_radial[np_i, :] = te_all
         st.tresid_vals[np_i] = te_all[0]
 
-        if (np_i + 1) % s.progress_interval == 0 or np_i + 1 == n_pulses:
+        if s.show_progress is not False and (
+                (np_i + 1) % s.progress_interval == 0 or np_i + 1 == n_pulses):
             print(f"    Pulse {np_i + 1}/{n_pulses}: "
                   f"Teq={st.teq_vals[np_i] - 273.15:.1f} C, "
                   f"Tresid={te_all[0] - 273.15:.1f} C")
@@ -381,10 +390,7 @@ def _solve_independent(s: _Setup, st: _State, progress: ProgressReporter) -> Non
 _SOLVE_MODES = {"scale": _solve_scale, "independent": _solve_independent}
 
 
-def radial_profile_solver(cfg: dict | None = None) -> dict:
-    """Run the radial-profile TTM solver. Returns the v1 results dict."""
-    if cfg is None:
-        cfg = {}
+def _radial_profile(cfg: dict) -> dict:
 
     # Defaults come from the schema so there is one place to read them and
     # one place they can change. See schema.describe_solver('radial_profile').
@@ -432,7 +438,9 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
             f'Unknown radialSolveMode "{radial_solve_mode}". '
             f"Use {' or '.join(repr(m) for m in _SOLVE_MODES)}.")
 
-    sim_duration = get_cfg_field(cfg, "simDuration", d["simDuration"])
+    resolved = effective_config("radial_profile", cfg)
+    sim_duration = resolved["simDuration"]
+    n_pulses_cfg = resolved["nPulses"]
 
     early_stop_melt_radius_um = get_cfg_field(
         cfg, "earlyStopMeltRadius_um", d["earlyStopMeltRadius_um"])
@@ -455,7 +463,8 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     # ==================  Derived quantities  ================================
     dl = derive_laser(pavg=pavg, f_rep=f_rep, spot_radius=spot_radius,
                       absorbance=absorbance, t0_c=t0_c, gamma=gamma,
-                      g_ep=g_ep, sim_duration=sim_duration)
+                      g_ep=g_ep, sim_duration=sim_duration,
+                      n_pulses=n_pulses_cfg)
     t0 = dl.t0_k
     ep = dl.pulse_energy
     f_peak = dl.peak_fluence
@@ -537,6 +546,7 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         dt_floor_abs=dt_floor_abs, pulse_fine_win=pulse_fine_win,
         relax_tol=relax_tol, relax_max_t=relax_max_t,
         store_history=store_history, progress_interval=progress_interval,
+        show_progress=show_progress,
         early_stop_enabled=early_stop_enabled,
         early_stop_check_interval=early_stop_check_interval,
         early_stop_t_melt_c=early_stop_t_melt_c,
@@ -630,10 +640,12 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
     out_filename = apply_case_tag(cfg, (
         f"TTM_Radial_Result_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
         f"{n_pulses}p_{pulse_profile_name}.txt"))
-    out_path = os.path.join(output_dir, out_filename)
+    write_report, _ = report_switches(cfg)
+    out_path = (os.path.join(output_dir, out_filename) if write_report
+                else None)
 
     final_radial_t = tresid_radial[-1, :]
-    with open(out_path, "w", encoding="utf-8") as fid:
+    with report_file(out_path) as fid:
         write_header(fid, "Radial Surface TTM Calculator — Output",
                      f"  Mode: {radial_solve_mode}")
         fid.write(f"--- Material: {str(material).upper()} ---\n")
@@ -663,7 +675,24 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         fid.writelines(f"  r = {r_grid[ri] * 1e6:8.2f} um :  "
                        f"T = {final_radial_t[ri] - 273.15:.2f} C\n"
                        for ri in range(nr))
-    print(f"  Output written to: {out_path}\n")
+    if out_path is not None:
+        print(f"  Output written to: {out_path}\n")
+
+    melt_p = melt_pulse(teq_vals, mat.t_melt_c)
+    coast_diags = []
+    if n_diff > n_diff_min:
+        coast_diags.append(diagnostic(
+            "coast_steps_raised",
+            f"Ndiff was raised from {n_diff_min} to {n_diff} depth substeps "
+            "per period to keep the coast Fourier number at 0.5.",
+            "Set Ndiff to this value or more to silence the notice.",
+            key="Ndiff", level="info"))
+    run_diags = validity_diagnostics(
+        float(teq_vals.max()) - 273.15, mat.t_melt_c, material,
+        melt_pulse=melt_p, peak_fluence=f_peak,
+        ablation_threshold=get_cfg_field(cfg, "ablationThreshold",
+                                         mat.f_ablation),
+        extra=coast_diags)
 
     # ==================  Plots  =============================================
     if make_plots:
@@ -691,15 +720,23 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         "contractVersion": "v1",
         "material": material,
         "caseTag": case_tag(cfg),
-        "resolvedConfig": effective_config("radial_profile", cfg),
+        "resolvedConfig": resolved,
         "materialProps": mat.props(k_model_name(mat)),
-        "warnings": validity_warnings(
-            float(teq_vals.max()) - 273.15, mat.t_melt_c, material),
+        "warnings": diagnostic_messages(run_diags),
+        "diagnostics": run_diags,
+        "Tmelt_C": mat.t_melt_c,
+        "meltDetected": melt_p > 0,
+        "meltPulse": melt_p,
+        "pulseEnergy_J": ep,
+        "peakFluence_J_m2": f_peak,
+        "absorbedFluence_J_m2": eabs_areal,
+        "NdiffUsed": n_diff,
         "mode": radial_solve_mode,
         "nPulses": n_pulses,
         "nPulsesRequested": n_pulses_requested,
         "earlyStopped": n_pulses < n_pulses_requested,
         "peakTeq_C": teq_vals.max() - 273.15,
+        "peakTl_C": teq_vals.max() - 273.15,
         "finalResid_C": tresid_vals[-1] - 273.15,
         "TeqVals_C": teq_vals - 273.15,
         "TresidVals_C": tresid_vals - 273.15,
@@ -711,3 +748,10 @@ def radial_profile_solver(cfg: dict | None = None) -> dict:
         "finalRadialProfile_C": tresid_radial[-1, :] - 273.15,
         "spotRadius_um": spot_radius * 1e6,
     }
+
+
+def radial_profile_solver(cfg: dict | None = None) -> dict:
+    """Run the radial-profile TTM solver. Returns the v1 results dict."""
+    cfg = {} if cfg is None else cfg
+    with console(cfg):
+        return _radial_profile(cfg)

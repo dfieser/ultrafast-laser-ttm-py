@@ -153,6 +153,41 @@ def deposit_pulse(tz: np.ndarray, teq, exp_decay_z: np.ndarray,
     return tz
 
 
+# ========================  Peak refinement  ================================
+
+
+def refine_peak(t3, d3):
+    """Sub-sample peak of a sampled curve from the three samples around it.
+
+    Fits the parabola through ``(t3[i], d3[i])`` for the sample before, at
+    and after a discrete maximum and returns ``(t_peak, d_peak)`` of its
+    vertex, or None when the vertex falls outside the three samples or the
+    three points are not concave.
+
+    The fit is done in time measured from the middle sample. Fitting in
+    absolute time is catastrophically ill-conditioned for this library:
+    a pulse a millisecond into a train sampled at picosecond spacing puts
+    t^2 terms near 1e19 in the vertex value, whose rounding remainder is
+    hundreds of kelvin. The MATLAB reference fits in absolute time, and
+    the port inherited spikes of exactly 256 K and 512 K from it until
+    0.4.0.
+    """
+    h1 = float(t3[1] - t3[0])
+    h2 = float(t3[2] - t3[1])
+    if h1 <= 0.0 or h2 <= 0.0:
+        return None
+    d0, d1, d2 = float(d3[0]), float(d3[1]), float(d3[2])
+    # d(tau) = d1 + b*tau + a*tau^2 through (-h1, d0), (0, d1), (h2, d2)
+    a = ((d2 - d1) / h2 + (d0 - d1) / h1) / (h1 + h2)
+    if a >= 0.0:
+        return None
+    b = (d2 - d1) / h2 - a * h2
+    tau_peak = -b / (2.0 * a)
+    if not -h1 <= tau_peak <= h2:
+        return None
+    return float(t3[1]) + tau_peak, d1 - b * b / (4.0 * a)
+
+
 # ========================  Derived pulse-train values  =====================
 
 
@@ -171,16 +206,24 @@ class DerivedLaser:
 
 def derive_laser(*, pavg: float, f_rep: float, spot_radius: float,
                  absorbance: float, t0_c: float, gamma: float, g_ep: float,
-                 sim_duration: float | None = None) -> DerivedLaser:
+                 sim_duration: float | None = None,
+                 n_pulses: int | None = None) -> DerivedLaser:
     """Derive the shared pulse-train quantities from the config inputs.
 
     Each expression is the one the solvers carried individually, written
     once. sim_duration of None, used by the single-pulse solver, leaves
-    n_pulses as None.
+    n_pulses as None. An explicit n_pulses (the nPulses config key) wins
+    over the count derived from sim_duration.
     """
     t0 = t0_c + 273.15
     ep = pavg / f_rep
     f_peak = 2.0 * ep / (np.pi * spot_radius**2)
+    if n_pulses is not None:
+        count: int | None = int(n_pulses)
+    elif sim_duration is not None:
+        count = matlab_round(sim_duration * f_rep)
+    else:
+        count = None
     return DerivedLaser(
         t0_k=t0,
         pulse_energy=ep,
@@ -188,31 +231,101 @@ def derive_laser(*, pavg: float, f_rep: float, spot_radius: float,
         absorbed_fluence=absorbance * f_peak,
         period=1.0 / f_rep,
         tau_eph=gamma * t0 / g_ep,
-        n_pulses=(matlab_round(sim_duration * f_rep)
-                  if sim_duration is not None else None),
+        n_pulses=count,
     )
 
 
-def validity_warnings(peak_t_c: float, t_melt_c: float, material: str,
-                      *, emit: bool = True) -> list[str]:
-    """Warnings about a run that left the model's range of validity.
+def coast_substeps(n_diff_min: int, alpha: float, gap: float, dz: float,
+                   fourier_max: float = 0.5) -> int:
+    """Crank-Nicolson substeps for a coast of length gap [s].
+
+    At least n_diff_min, and enough to keep the Fourier number
+    alpha*dt/dz^2 at or below fourier_max. Crank-Nicolson is stable at any
+    step, but on the sharp profile a pulse leaves it rings for the first
+    few steps, and at a Fourier number of several the samples inside the
+    first 100 ns of a coast are off by half. The end-of-period state is
+    insensitive to the count, which is why the fixtures at 18 MHz, where
+    the number is 0.15, are unaffected.
+    """
+    return max(int(n_diff_min),
+               int(np.ceil(alpha * gap / (fourier_max * dz**2))))
+
+
+def melt_pulse(peaks_k, t_melt_c: float) -> int:
+    """1-based index of the first pulse whose peak [K] passed the melting
+    point, or 0 when none did."""
+    hot = np.flatnonzero(np.asarray(peaks_k, dtype=float) - 273.15 > t_melt_c)
+    return int(hot[0]) + 1 if hot.size else 0
+
+
+def diagnostic(code: str, message: str, suggestion: str = "",
+               key: str | None = None, level: str = "warning") -> dict:
+    """One run diagnostic in the shape validate_config reports problems.
+
+    level is "warning" for a concern about the result and "info" for a
+    notice about what the solver did; only warnings are raised through
+    warnings.warn and listed under the results key ``warnings``.
+    """
+    out = {"code": code, "level": level, "message": message,
+           "suggestion": suggestion}
+    if key is not None:
+        out["key"] = key
+    return out
+
+
+def diagnostic_messages(diags) -> list[str]:
+    """The warning-level messages of a diagnostics list, as plain strings."""
+    return [d["message"] for d in diags if d.get("level", "warning") == "warning"]
+
+
+def validity_diagnostics(peak_t_c: float, t_melt_c: float, material: str,
+                         *, melt_pulse: int = 0,
+                         peak_fluence: float | None = None,
+                         ablation_threshold: float | None = None,
+                         extra=(), emit: bool = True) -> list[dict]:
+    """Diagnostics about a run that left the model's range of validity.
 
     The solvers have no phase change and no ablation: a lattice above the
     melting point keeps heating as a solid, so every temperature past that
     point is a statement about deposited energy, not about the material.
-    Returns the messages for the results envelope and, with emit, raises
-    each one through warnings.warn so console users see it as well.
+    Each entry carries a code (above_melting, above_ablation, plus any
+    passed in extra), a message and a suggestion. With emit, every message
+    is also raised through warnings.warn so console users see it.
     """
-    msgs: list[str] = []
+    out: list[dict] = []
     if np.isfinite(peak_t_c) and peak_t_c > t_melt_c:
-        msgs.append(
+        where = f" First on pulse {melt_pulse}." if melt_pulse else ""
+        out.append(diagnostic(
+            "above_melting",
             f"Peak lattice temperature {peak_t_c:.0f} C exceeds the melting "
             f"point of {str(material).upper()} ({t_melt_c:.0f} C). The model "
             f"has no phase change or ablation, so temperatures above the "
             f"melting point are not physical: the fluence is above the "
-            f"melting threshold for these settings.")
+            f"melting threshold for these settings.{where}",
+            "Lower Pavg, raise f_rep or enlarge spotRadius until peakTl_C "
+            "stays below Tmelt_C.", key="Pavg"))
+    if (peak_fluence is not None and ablation_threshold is not None
+            and peak_fluence > ablation_threshold):
+        out.append(diagnostic(
+            "above_ablation",
+            f"Peak fluence {peak_fluence / 1e4:.3g} J/cm^2 exceeds the "
+            f"single-shot ablation threshold of {str(material).upper()} "
+            f"({ablation_threshold / 1e4:.2g} J/cm^2). The model has no "
+            "ablation, so the run describes deposited energy, not the "
+            "material's response.",
+            "Bring the peak fluence under the threshold, or set "
+            "ablationThreshold to your own value.", key="Pavg"))
+    out.extend(extra)
     if emit:
-        for m in msgs:
-            warnings.warn(m, stacklevel=2)
-    return msgs
+        for d in out:
+            if d.get("level", "warning") == "warning":
+                warnings.warn(d["message"], stacklevel=2)
+    return out
+
+
+def validity_warnings(peak_t_c: float, t_melt_c: float, material: str,
+                      *, emit: bool = True, **kwargs) -> list[str]:
+    """The warning messages of validity_diagnostics, as plain strings."""
+    return diagnostic_messages(validity_diagnostics(
+        peak_t_c, t_melt_c, material, emit=emit, **kwargs))
 

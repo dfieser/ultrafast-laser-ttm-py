@@ -34,17 +34,26 @@ from .materials import k_model_name, k_table, resolve_material
 from .physics import (
     INV_THRESHOLD_K,
     bath_energy_density,
+    coast_substeps,
     derive_laser,
+    diagnostic,
+    diagnostic_messages,
     energy_mismatch_pct,
     equilibrium_temperature,
-    validity_warnings,
+    melt_pulse,
+    refine_peak,
+    validity_diagnostics,
 )
 from .progress import ProgressReporter
 from .reporting import (
     NO_HISTORY_NOTE,
+    NO_TABLE_NOTE,
     apply_case_tag,
     case_tag,
+    console,
     filename_slug,
+    report_file,
+    report_switches,
     resolve_output_dir,
     write_header,
     write_xy_table,
@@ -66,7 +75,7 @@ _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
 def _derive_radial_view(profile_snaps_tz, t0, spot_radius, nr_radial,
                         r_max_factor, alpha_diff, sim_duration,
-                        warnings_out):
+                        warn_ratio, diagnostics_out):
     """Scale the depth solution radially under the Gaussian fluence profile.
 
     The 1D solve is a beam-centre column. Away from centre the deposited
@@ -79,37 +88,66 @@ def _derive_radial_view(profile_snaps_tz, t0, spot_radius, nr_radial,
     fluence_ratio = np.exp(-2.0 * r_grid**2 / spot_radius**2)
 
     l_lat = float(np.sqrt(alpha_diff * sim_duration))
+    ratio = l_lat / spot_radius
     print(f"  Lateral diffusion length: {l_lat * 1e6:.2f} um  "
           f"(spot radius: {spot_radius * 1e6:.0f} um)")
-    if l_lat > 0.1 * spot_radius:
-        msg = (f"Lateral diffusion ({l_lat * 1e6:.1f} um) is >10% of spot "
-               f"radius ({spot_radius * 1e6:.0f} um). Radial scaling "
+    if ratio > warn_ratio:
+        msg = (f"Lateral diffusion ({l_lat * 1e6:.1f} um) is "
+               f"{100.0 * ratio:.0f}% of the spot radius "
+               f"({spot_radius * 1e6:.0f} um), above the "
+               f"{100.0 * warn_ratio:.0f}% limit. Radial scaling "
                "approximation degrades.")
         # Both routes on purpose: warnings.warn for Python callers, the
         # results list for CLI and MCP consumers reading serialized output.
         warnings.warn(msg, stacklevel=2)
-        warnings_out.append(msg)
+        diagnostics_out.append(diagnostic(
+            "lateral_diffusion", msg,
+            "Shorten simDuration or enlarge spotRadius, or raise "
+            "lateralDiffusionWarnRatio if the approximation is acceptable "
+            "for the question at hand.", key="simDuration"))
 
     # Surface temperature versus radius at each snapshot pulse.
     surface_c = np.array([
         t0 + (tz[0] - t0) * fluence_ratio - 273.15 for tz in profile_snaps_tz])
-    # Depth by radius map at the last snapshot.
-    cross_section_c = t0 + np.outer(
-        fluence_ratio, profile_snaps_tz[-1] - t0) - 273.15
+    # Radius by depth map at each snapshot pulse; the last one is the
+    # historical crossSection_C, computed identically.
+    cross_sections_c = np.array([
+        t0 + np.outer(fluence_ratio, tz - t0) - 273.15
+        for tz in profile_snaps_tz])
 
     return {
         "radialGrid_um": r_grid * 1e6,
         "radialFluenceRatio": fluence_ratio,
         "radialSurfaceProfiles_C": surface_c,
-        "crossSection_C": cross_section_c,
+        "crossSection_C": cross_sections_c[-1],
+        "crossSections_C": cross_sections_c,
         "lateralDiffusionLength_m": l_lat,
+        "lateralDiffusionRatio": ratio,
     }
 
 
-def depth_profile_solver(cfg: dict | None = None) -> dict:
-    """Run the 1D depth-resolved TTM solver. Returns the v1 results dict."""
-    if cfg is None:
-        cfg = {}
+def _profile_snapshot_pulses(requested, n_pulses: int) -> np.ndarray:
+    """The 1-based pulses whose residual depth profile is kept.
+
+    The caller's list when given, clipped to the run; otherwise at most 12
+    logarithmically spaced pulses ending at the last one, as in MATLAB.
+    """
+    if requested is None:
+        n_profile_snaps = min(n_pulses, 12)
+        if n_pulses > 1:
+            return np.unique(np.round(
+                np.logspace(0, np.log10(n_pulses), n_profile_snaps)).astype(int))
+        return np.array([1])
+    wanted = np.unique(np.asarray(requested, dtype=int))
+    wanted = wanted[(wanted >= 1) & (wanted <= n_pulses)]
+    if wanted.size == 0:
+        raise ValueError(
+            "profileSnapshotPulses has no entry between 1 and nPulses "
+            f"({n_pulses}).")
+    return wanted
+
+
+def _depth_profile(cfg: dict) -> dict:
 
     # Defaults come from the schema so there is one place to read them and
     # one place they can change. See schema.describe_solver('depth_profile').
@@ -147,7 +185,9 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     lz = get_cfg_field(cfg, "Lz", d["Lz"])
     nz = int(get_cfg_field(cfg, "Nz", d["Nz"]))
 
-    sim_duration = get_cfg_field(cfg, "simDuration", d["simDuration"])
+    resolved = effective_config("depth_profile", cfg)
+    sim_duration = resolved["simDuration"]
+    n_pulses_cfg = resolved["nPulses"]
     snapshot_delays = np.asarray(
         get_cfg_field(cfg, "snapshotDelays", d["snapshotDelays"]), dtype=float
     )
@@ -175,7 +215,8 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     # ==================  Derived quantities  ================================
     dl = derive_laser(pavg=pavg, f_rep=f_rep, spot_radius=spot_radius,
                       absorbance=absorbance, t0_c=t0_c, gamma=gamma,
-                      g_ep=g_ep, sim_duration=sim_duration)
+                      g_ep=g_ep, sim_duration=sim_duration,
+                      n_pulses=n_pulses_cfg)
     t0 = dl.t0_k
     ep = dl.pulse_energy
     f_peak = dl.peak_fluence
@@ -194,6 +235,9 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     nz_diff = int(np.ceil(ldiff / dz_diff)) + 1
     ldiff = (nz_diff - 1) * dz_diff
     z_grid_diff = np.arange(nz_diff) * dz_diff
+    # Ndiff is a floor: the coast keeps its Fourier number at or below 0.5.
+    n_diff_cfg = n_diff
+    n_diff = coast_substeps(n_diff, alpha_diff, trep, dz_diff)
 
     # Fine spatial grid
     assert nz >= 3, "Need at least 3 spatial nodes."
@@ -262,14 +306,11 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
 
     tz_diff = t0 * np.ones(nz_diff)
 
-    n_profile_snaps = min(n_pulses, 12)
-    if n_pulses > 1:
-        profile_snap_pulses = np.unique(np.round(
-            np.logspace(0, np.log10(n_pulses), n_profile_snaps)).astype(int))
-    else:
-        profile_snap_pulses = np.array([1])
+    profile_snap_pulses = _profile_snapshot_pulses(
+        get_cfg_field(cfg, "profileSnapshotPulses", None), n_pulses)
     profile_snaps_tz: list[np.ndarray] = []
     profile_snaps_label: list[str] = []
+    profile_snap_times: list[float] = []
 
     # Loop-invariant fine-to-coarse grid overlap (depends only on the grids)
     overlap_mask = z_grid_diff <= lz
@@ -319,8 +360,16 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
                 np.log10(post_delay), np.log10(coast_len), n_log_pts)
         else:
             t_log = np.empty(0)
+        # The requested snapshot instants join the first pulse's output
+        # times, so each snapshot is taken exactly when asked rather than
+        # at the nearest sample. Output times never steer the integrator.
+        if np_i == 1:
+            t_snaps = t_pulse_center + snapshot_delays
+            t_snaps = t_snaps[(t_snaps >= t_p1_start) & (t_snaps <= t_p1_end)]
+        else:
+            t_snaps = np.empty(0)
         t_out = np.unique(np.concatenate(
-            [[t_p1_start], t_during, t_log, [t_p1_end]]))
+            [[t_p1_start], t_during, t_log, t_snaps, [t_p1_end]]))
         t_out = t_out[(t_out >= t_p1_start) & (t_out <= t_p1_end)]
 
         sol = solve_ivp(rhs, (t_out[0], t_out[-1]), y_current,
@@ -361,25 +410,17 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         if max_inv > inv_threshold_pp:
             inv_indices = np.flatnonzero(d_t_inv > inv_threshold_pp)
 
-            # Refine peak time via parabolic interpolation
+            # Refine the peak time and value with the parabola through the
+            # three samples around the discrete maximum, fitted in time
+            # relative to the middle sample (see physics.refine_peak).
             t_max_raw = t_sol[max_inv_idx]
             if 0 < max_inv_idx < d_t_inv.size - 1:
-                t3 = t_sol[max_inv_idx - 1: max_inv_idx + 2]
-                d3 = d_t_inv[max_inv_idx - 1: max_inv_idx + 2]
-                denom = (t3[0] - t3[1]) * (t3[0] - t3[2]) * (t3[1] - t3[2])
-                if abs(denom) > 0:
-                    a_coef = (t3[2] * (d3[1] - d3[0]) + t3[1] * (d3[0] - d3[2])
-                              + t3[0] * (d3[2] - d3[1])) / denom
-                    b_coef = (t3[2]**2 * (d3[0] - d3[1]) + t3[1]**2 * (d3[2] - d3[0])
-                              + t3[0]**2 * (d3[1] - d3[2])) / denom
-                    if abs(a_coef) > 0:
-                        t_peak_interp = -b_coef / (2.0 * a_coef)
-                        if t3[0] <= t_peak_interp <= t3[2]:
-                            t_max_raw = t_peak_interp
-                            max_inv = (a_coef * t_max_raw**2 + b_coef * t_max_raw
-                                       + d3[0] - a_coef * t3[0]**2 - b_coef * t3[0])
-                            inv_max_per_pulse[np_i - 1] = max(
-                                max_inv, inv_max_per_pulse[np_i - 1])
+                refined = refine_peak(t_sol[max_inv_idx - 1: max_inv_idx + 2],
+                                      d_t_inv[max_inv_idx - 1: max_inv_idx + 2])
+                if refined is not None:
+                    t_max_raw, max_inv = refined
+                    inv_max_per_pulse[np_i - 1] = max(
+                        max_inv, inv_max_per_pulse[np_i - 1])
             t_max_inv_per_pulse[np_i - 1] = t_max_raw - t_pulse_center
 
             # Refine onset time via linear interpolation at threshold
@@ -477,10 +518,13 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
 
         if np_i in profile_snap_pulses:
             profile_snaps_tz.append(tz_diff.copy())
+            profile_snap_times.append(
+                float(t_next_pulse_start if coast_gap > 0 else t_fine_end))
             tv, tu = smart_time(np_i * trep)
             profile_snaps_label.append(f"Pulse {np_i} ({tv:.3g} {tu})")
 
-        if np_i % progress_interval == 0 or np_i == n_pulses:
+        if show_progress is not False and (
+                np_i % progress_interval == 0 or np_i == n_pulses):
             print(f"    Pulse {np_i}/{n_pulses}: "
                   f"Te_peak={te_peak_per_pulse[np_i - 1] - 273.15:.0f} degC, "
                   f"Teq={teq - 273.15:.1f} degC, Tresid={tresidual - 273.15:.1f} degC  "
@@ -640,9 +684,11 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
     out_filename = apply_case_tag(cfg, (
         f"TTM_1D_Result_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
         f"{n_pulses}p_{pulse_profile_name}.txt"))
-    out_path = os.path.join(output_dir, out_filename)
+    write_report, report_history = report_switches(cfg)
+    out_path = (os.path.join(output_dir, out_filename) if write_report
+                else None)
 
-    with open(out_path, "w", encoding="utf-8") as fid:
+    with report_file(out_path) as fid:
         write_header(fid, "1D TTM Pulsed Laser Calculator — Output")
         fid.write(f"--- Material:  {str(material).upper()} ---\n")
         fid.write(f"  gamma  = {gamma:.2f}  J m^-3 K^-2\n")
@@ -684,7 +730,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         for p in range(n_pulses):
             fid.write(f"  Pulse {p + 1}: Teq={teq_vals[p] - 273.15:.2f} degC, "
                       f"Tresid={tresid_vals[p] - 273.15:.2f} degC\n")
-        if store_history:
+        if store_history and report_history:
             fid.write("\n")
             write_xy_table(
                 fid,
@@ -692,20 +738,41 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
                 ("Time_s", "Te_surf_degC", "Tl_surf_degC"),
                 ((all_times[i], all_te_surf[i] - 273.15,
                   all_tl_surf[i] - 273.15) for i in range(all_times.size)))
+        elif store_history:
+            fid.write("\n" + NO_TABLE_NOTE)
         else:
             fid.write("\n" + NO_HISTORY_NOTE)
-    print(f"  Output written to: {out_path}\n")
+    if out_path is not None:
+        print(f"  Output written to: {out_path}\n")
 
     # The radial view is part of the solution, not a figure. Computing it
     # here means the CLI and the MCP server get it, and the accuracy warning
     # it raises, even though both default to no figures.
-    run_warnings: list[str] = []
+    view_diags: list[dict] = []
     radial_view = None
     if enable_radial and profile_snaps_tz:
         print("\n=== Radial Surface Temperature Profiles (Multi-Pulse) ===")
         radial_view = _derive_radial_view(
             profile_snaps_tz, t0, spot_radius, nr_radial, r_max_factor,
-            alpha_diff, sim_duration, run_warnings)
+            alpha_diff, sim_duration,
+            float(get_cfg_field(cfg, "lateralDiffusionWarnRatio",
+                                d["lateralDiffusionWarnRatio"])),
+            view_diags)
+
+    melt_p = melt_pulse(tl_peak_per_pulse, mat.t_melt_c)
+    if n_diff > n_diff_cfg:
+        view_diags.append(diagnostic(
+            "coast_steps_raised",
+            f"Ndiff was raised from {n_diff_cfg} to {n_diff} substeps per "
+            "period to keep the coast Fourier number at 0.5.",
+            "Set Ndiff to this value or more to silence the notice.",
+            key="Ndiff", level="info"))
+    run_diags = validity_diagnostics(
+        tl_peak_all - 273.15, mat.t_melt_c, material, melt_pulse=melt_p,
+        peak_fluence=f_peak,
+        ablation_threshold=get_cfg_field(cfg, "ablationThreshold",
+                                         mat.f_ablation),
+        extra=view_diags)
 
     if make_plots:
         from .plotting import plot_depth_profile
@@ -743,10 +810,17 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         "contractVersion": "v1",
         "material": material,
         "caseTag": case_tag(cfg),
-        "resolvedConfig": effective_config("depth_profile", cfg),
+        "resolvedConfig": resolved,
         "materialProps": mat.props(k_model_name(mat)),
-        "warnings": run_warnings + validity_warnings(
-            tl_peak_all - 273.15, mat.t_melt_c, material),
+        "warnings": diagnostic_messages(run_diags),
+        "diagnostics": run_diags,
+        "Tmelt_C": mat.t_melt_c,
+        "meltDetected": melt_p > 0,
+        "meltPulse": melt_p,
+        "pulseEnergy_J": ep,
+        "peakFluence_J_m2": f_peak,
+        "absorbedFluence_J_m2": eabs_areal,
+        "NdiffUsed": n_diff,
         "nPulses": n_pulses,
         "peakPulse": peak_pulse,
         "peakTe_C": te_peak_all - 273.15,
@@ -789,6 +863,7 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
                           else np.empty((0, nz))),
         "zGridDiff_m": z_grid_diff,
         "profileSnapshotPulses": np.asarray(profile_snap_pulses, dtype=int),
+        "profileSnapshotTimes_s": np.asarray(profile_snap_times, dtype=float),
         "profileSnapshots_C": np.asarray(profile_snaps_tz) - 273.15,
         # Input parameters (for downstream analysis)
         "f_rep": f_rep,
@@ -809,3 +884,10 @@ def depth_profile_solver(cfg: dict | None = None) -> dict:
         # Radial view derived from the depth solution, when enabled.
         **(radial_view or {}),
     }
+
+
+def depth_profile_solver(cfg: dict | None = None) -> dict:
+    """Run the 1D depth-resolved TTM solver. Returns the v1 results dict."""
+    cfg = {} if cfg is None else cfg
+    with console(cfg):
+        return _depth_profile(cfg)

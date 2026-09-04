@@ -23,9 +23,24 @@ from scipy.io import savemat
 from .config import get_cfg_field
 from .kernels import profile_code, rk4_single_pulse_response, scanning_chunk
 from .materials import k_model_name, resolve_material
-from .physics import deposit_shape_weight, derive_laser, equilibrate, validity_warnings
+from .physics import (
+    deposit_shape_weight,
+    derive_laser,
+    diagnostic_messages,
+    equilibrate,
+    melt_pulse,
+    validity_diagnostics,
+)
 from .progress import ProgressReporter
-from .reporting import apply_case_tag, case_tag, filename_slug, write_header
+from .reporting import (
+    apply_case_tag,
+    case_tag,
+    console,
+    filename_slug,
+    report_file,
+    report_switches,
+    write_header,
+)
 from .schema import defaults as schema_defaults
 from .schema import effective_config, require_pulses
 from .units import smart_energy, smart_freq, smart_length, smart_time
@@ -42,8 +57,13 @@ def scanning_beam_solver(params: dict | None = None,
                          output_dir: str | None = None,
                          save_plots: bool = True) -> dict:
     """Run the 2D scanning-beam TTM solver. Returns the v1 results dict."""
-    if params is None:
-        params = {}
+    params = {} if params is None else params
+    with console(params):
+        return _scanning_beam(params, output_dir, save_plots)
+
+
+def _scanning_beam(params: dict, output_dir: str | None,
+                   save_plots: bool) -> dict:
     # Keep the caller's own keys: the merged defaults below would otherwise
     # look like explicit per-field material overrides.
     user_params = dict(params)
@@ -159,12 +179,28 @@ def scanning_beam_solver(params: dict | None = None,
     progress_interval = min(max(1, n_pulses // 10), 5000)
 
     tic_all = time.perf_counter()
+    show_progress = get_cfg_field(params, "showProgress", None)
     progress = ProgressReporter(n_pulses, title="laserttm: scanning beam",
-                                enabled=get_cfg_field(params, "showProgress",
-                                                      None))
+                                enabled=show_progress)
+
+    # Surface maps kept after chosen pulses. The loop already runs in
+    # chunks, so a snapshot only adds a chunk boundary: the chunk kernel
+    # carries no state between calls, and the arithmetic is unchanged.
+    requested_maps = get_cfg_field(params, "mapSnapshotPulses", None)
+    if requested_maps is None:
+        map_snap_pulses = np.empty(0, dtype=int)
+    else:
+        map_snap_pulses = np.unique(np.asarray(requested_maps, dtype=int))
+        map_snap_pulses = map_snap_pulses[
+            (map_snap_pulses >= 1) & (map_snap_pulses <= n_pulses)]
+    map_snaps: list[np.ndarray] = []
+    next_map = 0
+
     np_done = 0
     while np_done < n_pulses:
         np_next = min(np_done + progress_interval, n_pulses)
+        if next_map < map_snap_pulses.size:
+            np_next = min(np_next, int(map_snap_pulses[next_map]))
         scanning_chunk(np_done, np_next,
                        tsurf, tpeak_map, tz, peak_t_history,
                        x_grid, gy_gauss, inv2w2, v_scan, trep, dteq_single, t0,
@@ -173,18 +209,29 @@ def scanning_beam_solver(params: dict | None = None,
                        n_cn, n_diff, r_diff,
                        n_adi_per_gap, fxdt, fydt)
         np_done = np_next
+        if next_map < map_snap_pulses.size and np_done == map_snap_pulses[next_map]:
+            map_snaps.append(tsurf.copy())
+            next_map += 1
         elapsed = time.perf_counter() - tic_all
         pct_done = 100.0 * np_done / n_pulses
         eta_s = elapsed / np_done * (n_pulses - np_done)
-        print(f"    Pulse {np_done}/{n_pulses} ({pct_done:.0f}%) | "
-              f"Peak T={peak_t_history[np_done - 1] - 273.15:.1f} C | "
-              f"Elapsed {elapsed:.1f}s | ETA {eta_s:.1f}s")
+        if show_progress is not False and (
+                np_done % progress_interval == 0 or np_done == n_pulses):
+            print(f"    Pulse {np_done}/{n_pulses} ({pct_done:.0f}%) | "
+                  f"Peak T={peak_t_history[np_done - 1] - 273.15:.1f} C | "
+                  f"Elapsed {elapsed:.1f}s | ETA {eta_s:.1f}s")
         progress.update(np_done)
     progress.close()
     wall_time = time.perf_counter() - tic_all
     print(f"  Wall time: {wall_time:.2f} s")
 
     # ==================  Build output struct  ===============================
+    melt_p = melt_pulse(peak_t_history, mat.t_melt_c)
+    run_diags = validity_diagnostics(
+        float(tpeak_map.max()) - 273.15, mat.t_melt_c, params["material"],
+        melt_pulse=melt_p, peak_fluence=f_peak,
+        ablation_threshold=get_cfg_field(params, "ablationThreshold",
+                                         mat.f_ablation))
     results = {
         "solver": "ScanningBeam",
         "solverId": "scanning_beam",
@@ -193,15 +240,32 @@ def scanning_beam_solver(params: dict | None = None,
         "caseTag": case_tag(params),
         "resolvedConfig": effective_config("scanning_beam", user_params),
         "materialProps": mat.props(k_model_name(mat, constant_only=True)),
-        "warnings": validity_warnings(
-            float(tpeak_map.max()) - 273.15, mat.t_melt_c, params["material"]),
+        "warnings": diagnostic_messages(run_diags),
+        "diagnostics": run_diags,
+        "Tmelt_C": mat.t_melt_c,
+        "meltDetected": melt_p > 0,
+        "meltPulse": melt_p,
+        "pulseEnergy_J": ep,
+        "peakFluence_J_m2": f_peak,
+        "absorbedFluence_J_m2": dl.absorbed_fluence,
         "Tpeak_map": tpeak_map,
         "Tsurf": tsurf,
         "peakT_history": peak_t_history,
+        "Tpeak_map_C": tpeak_map - 273.15,
+        "Tsurf_C": tsurf - 273.15,
+        "peakT_history_C": peak_t_history - 273.15,
         "xGrid": x_grid,
         "yGrid": y_grid,
+        # The beam fires pulse i (0-based) at x = v_scan * i * Trep along
+        # y = 0, as in the chunk kernel.
+        "beamX_m": v_scan * np.arange(n_pulses) * trep,
+        "mapSnapshotPulses": map_snap_pulses,
+        "mapSnapshotTimes_s": map_snap_pulses * trep,
+        "TsurfSnapshots_C": (np.asarray(map_snaps) - 273.15 if map_snaps
+                             else np.empty((0, ny, nx))),
         "nPulses": n_pulses,
         "peakT_C": float(tpeak_map.max()) - 273.15,
+        "peakTl_C": float(tpeak_map.max()) - 273.15,
         "pulseSpacing": pulse_spacing,
         "simDuration_s": sim_duration,
         "wallTime": wall_time,
@@ -225,8 +289,10 @@ def scanning_beam_solver(params: dict | None = None,
         f"TTMmov_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
         f"{scan_str}_{n_pulses}p"))
 
-    out_path = os.path.join(output_dir, base_name + ".txt")
-    with open(out_path, "w", encoding="utf-8") as fid:
+    write_report, _ = report_switches(params)
+    out_path = (os.path.join(output_dir, base_name + ".txt") if write_report
+                else None)
+    with report_file(out_path) as fid:
         write_header(fid, "Moving Laser TTM — Output")
         fid.write(f"--- Material: {str(params['material']).upper()} ---\n")
         fid.write(f"  gamma = {gamma:.2f}  J m^-3 K^-2\n")

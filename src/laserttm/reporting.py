@@ -11,6 +11,8 @@ Every helper reproduces byte-for-byte the text the inline copies wrote,
 because report files are user-visible output that people diff and parse.
 """
 
+import contextlib
+import io
 import os
 from datetime import datetime
 
@@ -21,6 +23,43 @@ _RULE = "=" * 60 + "\n"
 
 NO_HISTORY_NOTE = ("  storeHistory=False: the per-sample time series was "
                    "not retained,\n  so no XY table is written.\n")
+
+NO_TABLE_NOTE = ("  reportHistory=False: the per-sample XY table was "
+                 "left out of this report.\n")
+
+
+def console(cfg: dict):
+    """Context that silences the solver's console output when ``verbose``
+    is False. Warnings still go to stderr and the results are unchanged."""
+    if bool(get_cfg_field(cfg, "verbose", True)):
+        return contextlib.nullcontext()
+    return contextlib.redirect_stdout(io.StringIO())
+
+
+class _NullReport:
+    """Swallows a report that writeReport turned off."""
+
+    def write(self, _text) -> None:
+        pass
+
+    def writelines(self, _lines) -> None:
+        pass
+
+
+@contextlib.contextmanager
+def report_file(path: str | None):
+    """Open the text report for writing, or a sink when ``path`` is None."""
+    if path is None:
+        yield _NullReport()
+        return
+    with open(path, "w", encoding="utf-8") as fid:
+        yield fid
+
+
+def report_switches(cfg: dict) -> tuple[bool, bool]:
+    """``(writeReport, reportHistory)`` as the config resolves them."""
+    return (bool(get_cfg_field(cfg, "writeReport", True)),
+            bool(get_cfg_field(cfg, "reportHistory", True)))
 
 
 def resolve_output_dir(cfg: dict) -> str:

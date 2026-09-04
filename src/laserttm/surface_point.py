@@ -21,21 +21,29 @@ from .config import get_cfg_field
 from .kernels import cn_coast_const, profile_code, rk4_pulse_phase
 from .materials import k_model_name, resolve_material
 from .physics import (
+    coast_substeps,
     deposit_amplitude,
     deposit_pulse,
     deposit_shape_weight,
     depth_deposit_shape,
     derive_laser,
+    diagnostic,
+    diagnostic_messages,
     energy_mismatch_pct,
     equilibrate,
-    validity_warnings,
+    melt_pulse,
+    validity_diagnostics,
 )
 from .progress import ProgressReporter
 from .reporting import (
     NO_HISTORY_NOTE,
+    NO_TABLE_NOTE,
     apply_case_tag,
     case_tag,
+    console,
     filename_slug,
+    report_file,
+    report_switches,
     resolve_output_dir,
     write_header,
     write_xy_table,
@@ -49,10 +57,7 @@ _trapezoid = np.trapezoid if hasattr(np, "trapezoid") else np.trapz
 
 
 
-def surface_point_solver(cfg: dict | None = None) -> dict:
-    """Run the 0D surface-point TTM solver. Returns the v1 results dict."""
-    if cfg is None:
-        cfg = {}
+def _surface_point(cfg: dict) -> dict:
 
     # Defaults come from the schema so there is one place to read them and
     # one place they can change. See schema.describe_solver('surface_point').
@@ -89,7 +94,9 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     pulse_profile_name = get_cfg_field(cfg, "pulseProfile", d["pulseProfile"])
     tau_fwhm = get_cfg_field(cfg, "tau_FWHM", d["tau_FWHM"])
     f_rep = get_cfg_field(cfg, "f_rep", d["f_rep"])
-    sim_duration = get_cfg_field(cfg, "simDuration", d["simDuration"])
+    resolved = effective_config("surface_point", cfg)
+    sim_duration = resolved["simDuration"]
+    n_pulses_cfg = resolved["nPulses"]
 
     depth_profile = get_cfg_field(cfg, "depthProfile", d["depthProfile"])
     dz_target = get_cfg_field(cfg, "dzTarget", d["dzTarget"])
@@ -103,7 +110,8 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     # ==================  Incident Fluence  ==================================
     dl = derive_laser(pavg=pavg, f_rep=f_rep, spot_radius=spot_radius,
                       absorbance=absorbance, t0_c=t0_c, gamma=gamma,
-                      g_ep=g_ep, sim_duration=sim_duration)
+                      g_ep=g_ep, sim_duration=sim_duration,
+                      n_pulses=n_pulses_cfg)
     ep_calc = dl.pulse_energy
     f_si = dl.peak_fluence
     t0 = dl.t0_k
@@ -120,6 +128,9 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     dz = dz_target
     nz = int(np.ceil(ldiff / dz)) + 1
     ldiff = (nz - 1) * dz
+    # Ndiff is a floor: the coast keeps its Fourier number at or below 0.5.
+    n_diff_cfg = n_diff
+    n_diff = coast_substeps(n_diff, alpha_l, trep, dz)
     z_grid = np.arange(nz) * dz
     print(f"  Diffusion: kl={kl:.1f} W/mK, alpha={alpha_l:.3e} m^2/s, "
           f"L={ldiff * 1e6:.1f} um, dz={dz * 1e9:.2f} nm")
@@ -154,6 +165,8 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     pulse_center_t = pulse_offset + np.arange(n_pulses) * trep
     teq_vals = np.zeros(n_pulses)
     tresid_vals = np.zeros(n_pulses)
+    te_peak_per_pulse = np.zeros(n_pulses)
+    tl_peak_per_pulse = np.zeros(n_pulses)
     absorbed = 0.0
 
     te_now = t0
@@ -187,6 +200,8 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
             pulse_fine_win, relax_tol, relax_max_t, dt_floor_abs,
         )
         absorbed += absorbed_phase
+        te_peak_per_pulse[np_i] = loc_te.max()
+        tl_peak_per_pulse[np_i] = loc_tl.max()
         if store_history:
             cell_times.append(loc_t)
             cell_te.append(loc_te)
@@ -249,7 +264,8 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         te_now = tresidual
         tl_now = tresidual
 
-        if (np_i + 1) % progress_interval == 0 or np_i + 1 == n_pulses:
+        if show_progress is not False and (
+                (np_i + 1) % progress_interval == 0 or np_i + 1 == n_pulses):
             print(f"    Pulse {np_i + 1}/{n_pulses}: Te_peak={loc_te.max():.1f} K, "
                   f"Teq={teq:.1f} K, Tresid={tresidual:.1f} K  "
                   f"({loc_t.size} fine + {n_coast_steps} diff steps)")
@@ -368,10 +384,12 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
     out_filename = apply_case_tag(cfg, (
         f"TTM_{filename_slug(f_rep, tau_fwhm, pavg, spot_radius)}_"
         f"{n_pulses}p_{pulse_profile_name}.txt"))
-    out_path = os.path.join(output_dir, out_filename)
+    write_report, report_history = report_switches(cfg)
+    out_path = (os.path.join(output_dir, out_filename) if write_report
+                else None)
 
     leff_val, leff_unit = smart_length(leff)
-    with open(out_path, "w", encoding="utf-8") as fid:
+    with report_file(out_path) as fid:
         write_header(fid, "Surface TTM Pulsed Laser Calculator — Output")
 
         fid.write("--- Laser Parameters ---\n")
@@ -410,14 +428,33 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
                       f"Tresid={tresid_vals[p] - 273.15:.2f} deg C\n")
         fid.write("\n")
 
-        if store_history:
+        if store_history and report_history:
             write_xy_table(
                 fid, "  XY Data: Time (s) | Te (deg C) | Tl (deg C)",
                 ("Time_s", "Te_degC", "Tl_degC"),
                 ((times[i], te_c[i], tl_c[i]) for i in range(nt)))
+        elif store_history:
+            fid.write(NO_TABLE_NOTE)
         else:
             fid.write(NO_HISTORY_NOTE)
-    print(f"  Output written to: {out_path}")
+    if out_path is not None:
+        print(f"  Output written to: {out_path}")
+
+    melt_p = melt_pulse(tl_peak_per_pulse, mat.t_melt_c)
+    coast_diags = []
+    if n_diff > n_diff_cfg:
+        coast_diags.append(diagnostic(
+            "coast_steps_raised",
+            f"Ndiff was raised from {n_diff_cfg} to {n_diff} substeps per "
+            "period to keep the coast Fourier number at 0.5.",
+            "Set Ndiff to this value or more to silence the notice.",
+            key="Ndiff", level="info"))
+    run_diags = validity_diagnostics(
+        tl_peak - 273.15, mat.t_melt_c, material, melt_pulse=melt_p,
+        peak_fluence=f_si,
+        ablation_threshold=get_cfg_field(cfg, "ablationThreshold",
+                                         mat.f_ablation),
+        extra=coast_diags)
 
     results = {
         "solver": "SurfacePoint",
@@ -425,9 +462,19 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
         "contractVersion": "v1",
         "material": material,
         "caseTag": case_tag(cfg),
-        "resolvedConfig": effective_config("surface_point", cfg),
+        "resolvedConfig": resolved,
         "materialProps": mat.props(k_model_name(mat, constant_only=True)),
-        "warnings": validity_warnings(tl_peak - 273.15, mat.t_melt_c, material),
+        "warnings": diagnostic_messages(run_diags),
+        "diagnostics": run_diags,
+        "Tmelt_C": mat.t_melt_c,
+        "meltDetected": melt_p > 0,
+        "meltPulse": melt_p,
+        "pulseEnergy_J": ep_calc,
+        "peakFluence_J_m2": f_si,
+        "absorbedFluence_J_m2": eabs_areal,
+        "NdiffUsed": n_diff,
+        "TePeakPerPulse_C": te_peak_per_pulse - 273.15,
+        "TlPeakPerPulse_C": tl_peak_per_pulse - 273.15,
         "outputFile": out_path,
         "outputDir": output_dir,
         "inputConfig": cfg,
@@ -475,3 +522,10 @@ def surface_point_solver(cfg: dict | None = None) -> dict:
             results["figureFile"] = fig_path
 
     return results
+
+
+def surface_point_solver(cfg: dict | None = None) -> dict:
+    """Run the 0D surface-point TTM solver. Returns the v1 results dict."""
+    cfg = {} if cfg is None else cfg
+    with console(cfg):
+        return _surface_point(cfg)

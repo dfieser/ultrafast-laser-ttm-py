@@ -30,11 +30,13 @@ def _meaning(field: dict) -> str:
 
 
 def _table(fields) -> list[str]:
-    lines = ["| Key | Type | Unit | Meaning |", "| --- | --- | --- | --- |"]
+    lines = ["| Key | Type | Unit | Axes | Meaning |",
+             "| --- | --- | --- | --- | --- |"]
     for f in fields:
         d = f.as_dict()
         unit = d["unit"] if d["unit"] else ""
-        lines.append(f"| `{d['name']}` | {d['kind']} | {unit} "
+        dims = " x ".join(f"`{x}`" for x in d.get("dims", []))
+        lines.append(f"| `{d['name']}` | {d['kind']} | {unit} | {dims} "
                      f"| {_meaning(d)} |")
     return lines
 
@@ -65,8 +67,15 @@ def render() -> str:
         "and over MCP through the `describe_solver` tool.",
         "",
         "All temperatures are Celsius except temperature differences,",
-        "which are Kelvin. A NaN marks a quantity that did not occur in",
-        "the run, such as an inversion that never happened.",
+        "which are Kelvin, and the scanning solver's original kelvin maps,",
+        "which now have Celsius twins. A NaN marks a quantity that did not",
+        "occur in the run, such as an inversion that never happened.",
+        "",
+        "The Axes column gives an array's axis order, one results key per",
+        "axis: an array key is the coordinate along that axis and has the",
+        "same length, and the scalar `nPulses` is the axis length itself.",
+        "The test suite checks every returned array against its axes, so",
+        "no array ships without its grid.",
         "",
         "## Shared envelope",
         "",

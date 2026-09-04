@@ -229,8 +229,12 @@ def validate_config(solver: str,
     """Check a config without running anything. Takes milliseconds.
 
     Returns ok, a list of errors and warnings each with a machine-readable
-    code and a suggested fix, the resolved config with defaults merged, and
-    an estimate of pulse count and runtime.
+    code and a suggested fix, the resolved config with defaults merged, the
+    derived pulse-train quantities (pulse energy, peak and absorbed fluence,
+    period, pulse count) and an estimate of pulse count and runtime. The
+    warnings include a peak fluence above the material's ablation
+    threshold, a simDuration that is not a whole number of periods, and a
+    coast step count the solver will raise.
 
     Catches the failures that otherwise cost a full run: a misspelled or
     wrong-case key, a key that belongs to a different solver, a unit slip
@@ -295,6 +299,7 @@ def start_run(solver: str, config: dict[str, Any] | None = None,
                      "started": time.time(), "dir": run_dir}
     out = _status(run_id)
     out["estimate"] = report["estimate"]
+    out["derived"] = report["derived"]
     if report["warnings"]:
         out["warnings"] = report["warnings"]
     return out

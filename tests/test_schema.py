@@ -10,6 +10,13 @@ import pytest
 
 from laserttm import schema
 
+# Keys added after the snapshot was taken, with the defaults they were
+# introduced with. Listed once so the per-solver tables below stay the
+# transcription of the original source.
+_RUN_CONTROLS = {"verbose": True, "writeReport": True}
+_HISTORY_CONTROLS = {**_RUN_CONTROLS, "reportHistory": True}
+_TRAIN = {"nPulses": None, "ablationThreshold": None}
+
 # solver id -> {key: default}, copied from the get_cfg_field call sites.
 SNAPSHOT = {
     "surface_point": {
@@ -22,7 +29,7 @@ SNAPSHOT = {
         "legacyDeposit": False,
         "makePlots": True, "saveFigures": False, "outputDir": None,
         "caseTag": "", "storeHistory": True,
-        "showProgress": None,
+        "showProgress": None, **_HISTORY_CONTROLS, **_TRAIN,
         "gamma_manual": 137.3, "Cl_manual": 2.54e6, "G_manual": 1.65e17,
         "kl_manual": 174.0, "kTable": "auto",
         "gamma": None, "Cl": None, "G": None, "kl": None, "T_melt_C": None,
@@ -31,11 +38,15 @@ SNAPSHOT = {
         "material": "W", "Pavg": 40.0, "spotRadius": 100e-6, "f_rep": 18e6,
         "tau_FWHM": 100e-15, "pulseProfile": "gaussian", "absorbance": 0.55,
         "T0_C": 25.0, "simDuration": 100e-6, "Lz": 1000e-9, "Nz": 200,
-        "enableRadialProfile": True, "Nr_radial": 20, "rMax_factor": 3.0,
+        # The radial view was on by default until 0.4.0, when the owner
+        # turned it off: it added array keys and a warning on most trains.
+        "enableRadialProfile": False, "Nr_radial": 20, "rMax_factor": 3.0,
         "dzTarget_diff": 500e-9, "Ndiff": 100, "relTol": 1e-6, "absTol": 1e-1,
         "storeHistory": True,
         "makePlots": True, "saveFigures": False, "outputDir": None,
         "caseTag": "", "showProgress": None,
+        "profileSnapshotPulses": None, "lateralDiffusionWarnRatio": 0.1,
+        **_HISTORY_CONTROLS, **_TRAIN,
         "gamma_manual": 137.3, "Cl_manual": 2.54e6, "G_manual": 1.65e17,
         "ke0_manual": 150.0, "kl_manual": 24.0, "alpha_opt_manual": 5.88e7,
         "kTable": "auto", "gamma": None, "Cl": None, "G": None, "kl": None,
@@ -51,7 +62,7 @@ SNAPSHOT = {
         "earlyStopCheckInterval": 100, "legacyDeposit": False,
         "storeHistory": True,
         "makePlots": True, "saveFigures": False, "outputDir": None,
-        "caseTag": "", "showProgress": None,
+        "caseTag": "", "showProgress": None, **_RUN_CONTROLS, **_TRAIN,
         "gamma_manual": 137.3, "Cl_manual": 2.54e6, "G_manual": 1.65e17,
         "kl_manual": 174.0, "kTable": "auto",
         "gamma": None, "Cl": None, "G": None, "kl": None, "T_melt_C": None,
@@ -61,7 +72,8 @@ SNAPSHOT = {
         "tau_FWHM": 100e-15, "pulseProfile": "gaussian", "absorbance": 0.55,
         "T0_C": 25.0, "Lz": 1000e-9, "Nz": 200, "relTol": 1e-6,
         "absTol": 1e-1, "makePlots": True, "saveFigures": False,
-        "outputDir": None, "caseTag": "",
+        "outputDir": None, "caseTag": "", "ablationThreshold": None,
+        **_HISTORY_CONTROLS,
         "gamma_manual": 137.3, "Cl_manual": 2.54e6, "G_manual": 1.65e17,
         "ke0_manual": 150.0, "kl_manual": 24.0, "alpha_opt_manual": 5.88e7,
         "kTable": "auto", "gamma": None, "Cl": None, "G": None, "kl": None,
@@ -75,7 +87,8 @@ SNAPSHOT = {
         "NadiPerGap": 10, "legacyDeposit": False,
         "Nx": 120, "Ny": 60, "xPad": 3.0, "yExtent": 5.0,
         "makePlots": True, "saveFigures": False, "outputDir": None,
-        "caseTag": "", "showProgress": None,
+        "caseTag": "", "showProgress": None, "mapSnapshotPulses": None,
+        "ablationThreshold": None, **_RUN_CONTROLS,
         "gamma_manual": 137.3, "Cl_manual": 2.54e6, "G_manual": 1.65e17,
         "kl_manual": 174.0, "kTable": "auto",
         "gamma": None, "Cl": None, "G": None, "kl": None, "T_melt_C": None,
@@ -114,10 +127,16 @@ def test_kl_means_different_things_in_the_two_families():
     assert optical.notes and lattice.notes
 
 
-def test_ndiff_is_documented_as_a_floor_only_in_the_radial_solver():
-    assert "minimum" in schema.solver_schema(
-        "radial_profile").params["Ndiff"].notes.lower()
-    assert not schema.solver_schema("depth_profile").params["Ndiff"].notes
+def test_ndiff_is_documented_as_a_floor_except_in_the_scanning_solver():
+    """Since 0.4.0 the surface and depth solvers raise Ndiff to hold the
+    coast Fourier number at 0.5, as the radial solver always did. The
+    scanning solver's depth coast is pinned by its fixtures and stays
+    exact, and its note says so."""
+    for solver_id in ("surface_point", "depth_profile", "radial_profile"):
+        spec = schema.solver_schema(solver_id).params["Ndiff"]
+        assert "minimum" in (spec.summary + spec.notes).lower(), solver_id
+    scan = schema.solver_schema("scanning_beam").params["Ndiff"].notes
+    assert "exact" in scan.lower()
 
 
 def test_rmax_factor_is_marked_plot_only_in_the_depth_solver():
@@ -297,7 +316,7 @@ def test_zero_pulse_config_is_rejected_with_the_fix_named():
         "surface_point", {"f_rep": 1e6, "simDuration": 1e-9})
     assert not result["ok"]
     (problem,) = [p for p in result["errors"] if p["code"] == "no_pulses"]
-    assert "simDuration = N / f_rep" in problem["suggestion"]
+    assert "nPulses = N" in problem["suggestion"]
 
 
 def test_zero_pulse_scan_names_the_scanning_keys():
